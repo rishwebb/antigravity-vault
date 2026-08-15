@@ -1,0 +1,3 @@
+# Core system is 100% functional with zero external dependencies (Python Standard Library)
+# Optional enhancements for high-performance inotify filesystem events:
+watchdog>=3.0.0

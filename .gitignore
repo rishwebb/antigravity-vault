@@ -1,0 +1,34 @@
+# SQLite database files and runtime states
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+antigravity_telemetry.db*
+
+# Local Vault Backups & Caches
+.antigravity_analytics_vault/
+backups/
+all_time_archive.json
+
+# Python bytecode & environments
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+env/
+venv/
+.venv/
+
+# Temporary and Process files
+*.log
+*.pid
+scratch/
+test_endpoints.py
+
+# OS / Editor artifacts
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp

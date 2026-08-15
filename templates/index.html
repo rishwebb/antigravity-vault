@@ -1,0 +1,1261 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Antigravity Multi-Account Token & Cost Analytics</title>
+  <meta name="description" content="Enterprise-grade local & cloud-accessible token and cost analytics hub for Gemini 3.x series in Antigravity.">
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            display: ['Outfit', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              100: '#e0e7ff',
+              400: '#818cf8',
+              500: '#6366f1',
+              600: '#4f46e5',
+              900: '#1e1b4b',
+            },
+            gemini: {
+              purple: '#8b5cf6',
+              blue: '#3b82f6',
+              cyan: '#06b6d4',
+              emerald: '#10b981',
+              amber: '#f59e0b',
+              rose: '#f43f5e',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <style>
+    body {
+      background-color: #030712;
+      color: #f3f4f6;
+    }
+    .glass-card {
+      background: rgba(15, 23, 42, 0.75);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(51, 65, 85, 0.6);
+    }
+    .glass-card:hover {
+      border-color: rgba(99, 102, 241, 0.4);
+    }
+    .glow-indigo {
+      box-shadow: 0 0 25px -5px rgba(99, 102, 241, 0.25);
+    }
+    .glow-purple {
+      box-shadow: 0 0 25px -5px rgba(139, 92, 246, 0.25);
+    }
+    .glow-emerald {
+      box-shadow: 0 0 25px -5px rgba(16, 185, 129, 0.25);
+    }
+    .glow-amber {
+      box-shadow: 0 0 25px -5px rgba(245, 158, 11, 0.25);
+    }
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0b0f19;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #1e293b;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #334155;
+    }
+  </style>
+</head>
+
+<body class="min-h-screen font-sans antialiased selection:bg-indigo-500 selection:text-white bg-slate-950 text-slate-100 relative overflow-x-hidden">
+
+  <!-- Background decorative grid / radial gradients -->
+  <div class="fixed inset-0 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(120,119,198,0.15),rgba(255,255,255,0))] pointer-events-none z-0"></div>
+  <div class="fixed inset-0 bg-[linear-gradient(to_right,#1e293b10_1px,transparent_1px),linear-gradient(to_bottom,#1e293b10_1px,transparent_1px)] bg-[size:32px_32px] pointer-events-none z-0"></div>
+
+  <!-- PIN AUTH LOCK SCREEN (For remote mobile visitors) -->
+  <div id="pin-lock-screen" class="fixed inset-0 bg-slate-950/95 backdrop-blur-md z-50 hidden flex-col items-center justify-center p-4">
+    <div class="glass-card rounded-2xl p-8 max-w-sm w-full text-center space-y-5 border border-indigo-500/30 shadow-2xl">
+      <div class="w-14 h-14 mx-auto rounded-2xl bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400">
+        <i data-lucide="lock" class="w-7 h-7"></i>
+      </div>
+      <div>
+        <h2 class="font-display font-bold text-xl text-white">Antigravity Cloud Access</h2>
+        <p class="text-xs text-slate-400 mt-1">Enter your 4-digit PIN code to unlock the analytics hub.</p>
+      </div>
+      <div class="space-y-3">
+        <input type="password" id="pin-input" maxlength="8" placeholder="Enter PIN (e.g. 4848)" class="w-full text-center font-mono text-xl tracking-widest bg-slate-900 text-white border border-slate-700 rounded-xl py-3 focus:outline-none focus:border-indigo-500">
+        <button onclick="submitPinAuth()" class="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm rounded-xl transition-all shadow-lg shadow-indigo-600/30">Unlock Dashboard</button>
+        <p id="pin-error-msg" class="text-xs text-rose-400 hidden">Invalid PIN code. Please try again.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="relative z-10 flex flex-col min-h-screen">
+    
+    <!-- TOP NAVIGATION BAR -->
+    <header class="sticky top-0 z-40 glass-card border-b border-slate-800/80 px-4 lg:px-8 py-3.5 flex flex-wrap items-center justify-between gap-4">
+      
+      <!-- Brand & Live Pulse Badge -->
+      <div class="flex items-center gap-3.5">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 via-purple-600 to-cyan-400 p-0.5 shadow-lg shadow-indigo-500/20 flex items-center justify-center">
+          <div class="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center">
+            <i data-lucide="sparkles" class="w-5 h-5 text-indigo-400"></i>
+          </div>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="font-display font-bold text-base lg:text-lg text-white tracking-tight">Antigravity Analytics</h1>
+            <span class="px-2 py-0.5 text-[10px] font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 rounded-full">Gemini 3.x Vault</span>
+          </div>
+          <div class="flex items-center gap-2 text-xs text-slate-400">
+            <span class="relative flex h-2 w-2">
+              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            <span id="daemon-status-text" class="font-medium text-emerald-400">Live Vault Active</span>
+            <span class="text-slate-600">•</span>
+            <span id="last-sync-time" class="text-[11px]">Just now</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Controls & Remote Actions -->
+      <div class="flex flex-wrap items-center gap-2.5">
+        
+        <!-- Live Forex Rate Pill -->
+        <div onclick="refreshForexLive()" title="Click to refresh live USD/INR exchange rate" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono bg-slate-900/90 border border-slate-800 hover:border-slate-700 text-slate-300 cursor-pointer transition-all">
+          <i data-lucide="globe" class="w-3.5 h-3.5 text-cyan-400"></i>
+          <span>1 USD = ₹<strong id="header-forex-rate" class="text-white">87.00</strong></span>
+          <i data-lucide="refresh-cw" id="icon-forex-refresh" class="w-3 h-3 text-slate-500 hover:text-cyan-400"></i>
+        </div>
+
+        <!-- Remote / Phone QR Button -->
+        <button onclick="openRemoteModal()" title="View on Phone / Cloud Tunnel QR" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-sm transition-all active:scale-95">
+          <i data-lucide="smartphone" class="w-3.5 h-3.5"></i>
+          <span>Phone / Cloud</span>
+        </button>
+
+        <!-- Account Switcher Dropdown -->
+        <div class="relative">
+          <select id="account-filter" onchange="onAccountChange()" class="bg-slate-900/90 text-xs font-medium text-slate-200 border border-slate-700 rounded-lg px-3 py-2 pr-8 focus:outline-none focus:border-indigo-500 cursor-pointer appearance-none">
+            <option value="all">🌐 All 5 Accounts Fleet</option>
+            <option value="acc_1">Account 1 (Primary - Dev)</option>
+            <option value="acc_2">Account 2 (Workhorse - Flash)</option>
+            <option value="acc_3">Account 3 (Architecture - Pro)</option>
+            <option value="acc_4">Account 4 (Research & Reasoning)</option>
+            <option value="acc_5">Account 5 (Sandbox / Client)</option>
+          </select>
+          <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-3 pointer-events-none"></i>
+        </div>
+
+        <!-- Date Range Filter -->
+        <div class="flex items-center bg-slate-900/90 border border-slate-800 p-0.5 rounded-lg text-xs font-medium">
+          <button onclick="setDateRange('24h')" id="range-24h" class="px-2.5 py-1.5 rounded-md text-slate-400 hover:text-slate-200 transition-colors">24h</button>
+          <button onclick="setDateRange('7d')" id="range-7d" class="px-2.5 py-1.5 rounded-md text-slate-400 hover:text-slate-200 transition-colors">7D</button>
+          <button onclick="setDateRange('30d')" id="range-30d" class="px-2.5 py-1.5 rounded-md text-slate-400 hover:text-slate-200 transition-colors">30D</button>
+          <button onclick="setDateRange('all')" id="range-all" class="px-2.5 py-1.5 rounded-md bg-indigo-600 text-white shadow-sm">All Time</button>
+        </div>
+
+        <!-- Auto-Refresh Toggle -->
+        <button onclick="toggleAutoRefresh()" id="btn-auto-refresh" class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-slate-900 border border-slate-800 text-emerald-400 hover:border-slate-700 transition-all">
+          <i data-lucide="refresh-cw" id="icon-refresh" class="w-3.5 h-3.5 animate-spin"></i>
+          <span>Auto (5s)</span>
+        </button>
+
+        <!-- Tools Dropdown (Settings / Deep Scan) -->
+        <div class="flex items-center gap-1.5">
+          <button onclick="triggerHistoricalScan()" title="Deep Scan Past Usage" class="p-2 rounded-lg bg-slate-900 border border-slate-800 text-amber-400 hover:text-amber-300 hover:border-slate-700 transition-colors">
+            <i data-lucide="history" id="icon-deep-scan" class="w-4 h-4"></i>
+          </button>
+          <button onclick="openSettingsModal()" title="Configure Account Aliases & Vault" class="p-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 transition-colors">
+            <i data-lucide="sliders" class="w-4 h-4"></i>
+          </button>
+        </div>
+
+      </div>
+    </header>
+
+    <!-- 5-ACCOUNT QUICK STATUS BAR -->
+    <div class="px-4 lg:px-8 py-3 bg-slate-950/80 border-b border-slate-900 overflow-x-auto">
+      <div id="accounts-fleet-bar" class="flex items-center gap-3 min-w-max">
+        <!-- Rendered dynamically -->
+      </div>
+    </div>
+
+    <!-- MAIN DASHBOARD CONTENT -->
+    <main class="flex-1 px-4 lg:px-8 py-6 space-y-6 max-w-[1600px] w-full mx-auto">
+      
+      <!-- HERO METRIC CARDS GRID -->
+      <section class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        
+        <!-- CARD 1: THEORETICAL VALUE SAVED -->
+        <div class="glass-card rounded-2xl p-5 relative overflow-hidden group glow-indigo">
+          <div class="absolute -top-12 -right-12 w-32 h-32 bg-indigo-600/10 rounded-full blur-2xl group-hover:bg-indigo-600/20 transition-all"></div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-semibold uppercase tracking-wider text-indigo-400 flex items-center gap-1.5">
+              <i data-lucide="shield-check" class="w-4 h-4"></i> Theoretical Value Saved
+            </span>
+            <span class="px-2 py-0.5 text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-md">100% Subscribed</span>
+          </div>
+          <div class="space-y-1">
+            <div class="flex items-baseline gap-2">
+              <span id="hero-cost-usd" class="font-display font-extrabold text-3xl lg:text-4xl text-white tracking-tight">$0.00</span>
+              <span class="text-xs text-slate-400 font-medium">USD</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <span id="hero-cost-inr" class="font-mono font-bold text-lg text-emerald-400">₹0.00</span>
+              <span class="text-[11px] text-slate-400 font-mono">INR (@ ₹<span id="rate-badge">87.00</span>)</span>
+            </div>
+          </div>
+          <div class="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+            <span>Lifetime Turns: <strong id="hero-turn-count" class="text-slate-200">0</strong></span>
+            <span>Active Sessions: <strong id="hero-session-count" class="text-slate-200">0</strong></span>
+          </div>
+        </div>
+
+        <!-- CARD 2: TOTAL TOKENS CONSUMED -->
+        <div class="glass-card rounded-2xl p-5 relative overflow-hidden group glow-purple">
+          <div class="absolute -top-12 -right-12 w-32 h-32 bg-purple-600/10 rounded-full blur-2xl group-hover:bg-purple-600/20 transition-all"></div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-semibold uppercase tracking-wider text-purple-400 flex items-center gap-1.5">
+              <i data-lucide="cpu" class="w-4 h-4"></i> Total Tokens Burned
+            </span>
+            <span class="px-2 py-0.5 text-[10px] font-mono bg-purple-500/10 text-purple-400 border border-purple-500/20 rounded-md">Multi-Tier</span>
+          </div>
+          <div class="space-y-1">
+            <div class="flex items-baseline gap-2">
+              <span id="hero-total-tokens" class="font-display font-extrabold text-3xl lg:text-4xl text-white tracking-tight">0</span>
+              <span class="text-xs text-slate-400 font-medium">Tokens</span>
+            </div>
+            <div class="text-xs text-slate-400 flex items-center gap-2">
+              <span>Input: <strong id="hero-prompt-tokens" class="text-slate-300 font-mono">0</strong></span>
+              <span>•</span>
+              <span>Cached: <strong id="hero-cached-tokens" class="text-slate-300 font-mono">0</strong></span>
+            </div>
+          </div>
+          <div class="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+            <span>Output Tokens: <strong id="hero-output-tokens" class="text-slate-200 font-mono">0</strong></span>
+            <span class="text-[11px] text-cyan-400 font-mono">⚡ 1M Rate: $0.75 / $3.75</span>
+          </div>
+        </div>
+
+        <!-- CARD 3: THINKING & REASONING TOKENS -->
+        <div class="glass-card rounded-2xl p-5 relative overflow-hidden group glow-amber">
+          <div class="absolute -top-12 -right-12 w-32 h-32 bg-amber-600/10 rounded-full blur-2xl group-hover:bg-amber-600/20 transition-all"></div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-semibold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
+              <i data-lucide="brain" class="w-4 h-4"></i> Deep Thinking Tokens
+            </span>
+            <span id="thinking-intensity-badge" class="px-2 py-0.5 text-[10px] font-mono bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-md">0% Intensity</span>
+          </div>
+          <div class="space-y-1">
+            <div class="flex items-baseline gap-2">
+              <span id="hero-thinking-tokens" class="font-display font-extrabold text-3xl lg:text-4xl text-amber-300 tracking-tight">0</span>
+              <span class="text-xs text-slate-400 font-medium">Tokens</span>
+            </div>
+            <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden mt-2">
+              <div id="thinking-progress-bar" class="bg-gradient-to-r from-amber-500 to-rose-500 h-full rounded-full transition-all duration-500" style="width: 0%"></div>
+            </div>
+          </div>
+          <div class="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+            <span>High/Med/Low Reasoning</span>
+            <span class="text-amber-400 font-semibold text-[11px]">Billed @ Output Rate</span>
+          </div>
+        </div>
+
+        <!-- CARD 4: VAULT IMMUTABILITY & BACKUPS -->
+        <div class="glass-card rounded-2xl p-5 relative overflow-hidden group glow-emerald">
+          <div class="absolute -top-12 -right-12 w-32 h-32 bg-emerald-600/10 rounded-full blur-2xl group-hover:bg-emerald-600/20 transition-all"></div>
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-semibold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+              <i data-lucide="database" class="w-4 h-4"></i> Vault Immutability
+            </span>
+            <span class="px-2 py-0.5 text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-md">Zero Data Loss</span>
+          </div>
+          <div class="space-y-1">
+            <div class="flex items-baseline gap-2">
+              <span id="vault-turns-count" class="font-display font-extrabold text-3xl lg:text-4xl text-white tracking-tight">4,084</span>
+              <span class="text-xs text-slate-400 font-medium">Saved Turns</span>
+            </div>
+            <div class="text-xs text-slate-400 flex items-center gap-2">
+              <span>DB Size: <strong id="vault-db-size" class="text-slate-300 font-mono">1.6 MB</strong></span>
+              <span>•</span>
+              <span class="text-emerald-400">WAL Protected</span>
+            </div>
+          </div>
+          <div class="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+            <span>Auto-Backup: <strong id="vault-last-backup" class="text-slate-200">Daily Active</strong></span>
+            <button onclick="triggerManualBackup()" class="text-indigo-400 hover:text-indigo-300 font-medium text-[11px]">Backup Now</button>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- INTERACTIVE CHARTS GRID -->
+      <section class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        <!-- TIMELINE CHART (Spans 2 cols) -->
+        <div class="glass-card rounded-2xl p-5 lg:col-span-2 space-y-4">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center gap-2">
+              <div class="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
+                <i data-lucide="trending-up" class="w-4 h-4"></i>
+              </div>
+              <div>
+                <h3 class="font-display font-bold text-base text-white">Daily Token Burn & Cost Velocity</h3>
+                <p class="text-xs text-slate-400">Standard Output vs Deep Thinking Reasoning Tokens</p>
+              </div>
+            </div>
+            <!-- Toggle Metric Buttons -->
+            <div class="flex items-center bg-slate-900 border border-slate-800 p-0.5 rounded-lg text-xs font-medium">
+              <button onclick="setChartMetric('tokens')" id="metric-btn-tokens" class="px-2.5 py-1 rounded-md bg-indigo-600 text-white">Tokens</button>
+              <button onclick="setChartMetric('thinking')" id="metric-btn-thinking" class="px-2.5 py-1 rounded-md text-slate-400 hover:text-white">Thinking Only</button>
+              <button onclick="setChartMetric('usd')" id="metric-btn-usd" class="px-2.5 py-1 rounded-md text-slate-400 hover:text-white">Cost ($)</button>
+              <button onclick="setChartMetric('inr')" id="metric-btn-inr" class="px-2.5 py-1 rounded-md text-slate-400 hover:text-white">Cost (₹)</button>
+            </div>
+          </div>
+          
+          <div class="h-72 w-full relative">
+            <canvas id="timelineChart"></canvas>
+          </div>
+        </div>
+
+        <!-- 5-ACCOUNT LOAD SHARE DONUT -->
+        <div class="glass-card rounded-2xl p-5 space-y-4 flex flex-col justify-between">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <div class="w-8 h-8 rounded-lg bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400">
+                <i data-lucide="pie-chart" class="w-4 h-4"></i>
+              </div>
+              <div>
+                <h3 class="font-display font-bold text-base text-white">5-Account Distribution</h3>
+                <p class="text-xs text-slate-400">Token share across accounts</p>
+              </div>
+            </div>
+          </div>
+          <div class="h-56 w-full relative flex items-center justify-center">
+            <canvas id="accountsDonutChart"></canvas>
+          </div>
+          <div id="accounts-legend" class="grid grid-cols-1 gap-1.5 text-xs">
+            <!-- Populated via JS -->
+          </div>
+        </div>
+
+      </section>
+
+      <!-- SECONDARY CHARTS & BREAKDOWN -->
+      <section class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        
+        <!-- MODEL PREFERENCE SHARE -->
+        <div class="glass-card rounded-2xl p-5 space-y-4">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <div class="w-8 h-8 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400">
+                <i data-lucide="layers" class="w-4 h-4"></i>
+              </div>
+              <div>
+                <h3 class="font-display font-bold text-base text-white">Model Preference & Workload</h3>
+                <p class="text-xs text-slate-400">Gemini 3.6 Flash vs 3.7 Flash vs 3.5 Pro</p>
+              </div>
+            </div>
+          </div>
+          <div class="h-60 w-full relative">
+            <canvas id="modelsBarChart"></canvas>
+          </div>
+        </div>
+
+        <!-- THINKING BUDGET DISTRIBUTION -->
+        <div class="glass-card rounded-2xl p-5 space-y-4">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <div class="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+                <i data-lucide="flame" class="w-4 h-4"></i>
+              </div>
+              <div>
+                <h3 class="font-display font-bold text-base text-white">Thinking Budget Intensity</h3>
+                <p class="text-xs text-slate-400">Sessions by Low vs Medium vs High Budget</p>
+              </div>
+            </div>
+          </div>
+          <div class="h-60 w-full relative">
+            <canvas id="thinkingBudgetChart"></canvas>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- LIVE AGENT ACTIVITY FEED & TELEMETRY LOGS -->
+      <section class="glass-card rounded-2xl p-5 space-y-4">
+        
+        <!-- Header & Search Controls -->
+        <div class="flex flex-wrap items-center justify-between gap-4">
+          <div class="flex items-center gap-2">
+            <div class="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+              <i data-lucide="list" class="w-4 h-4"></i>
+            </div>
+            <div>
+              <h3 class="font-display font-bold text-base text-white">Live Telemetry Activity Feed</h3>
+              <p class="text-xs text-slate-400">Turn-by-turn prompt, context caching, output, and deep thinking logs</p>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-3">
+            <div class="relative">
+              <input type="text" id="log-search-input" onkeyup="handleSearchKey(event)" placeholder="Search task, model, session..." class="bg-slate-900/90 text-xs text-slate-200 border border-slate-700 rounded-lg pl-8 pr-3 py-2 w-64 focus:outline-none focus:border-indigo-500">
+              <i data-lucide="search" class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none"></i>
+            </div>
+            
+            <select id="log-model-filter" onchange="onFilterChange()" class="bg-slate-900/90 text-xs text-slate-200 border border-slate-700 rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500">
+              <option value="all">All Models</option>
+              <option value="3.6 Flash">Gemini 3.6 Flash</option>
+              <option value="3.7 Flash">Gemini 3.7 Flash</option>
+              <option value="3.5 Pro">Gemini 3.5 Pro</option>
+            </select>
+
+            <button onclick="exportLogsCSV()" class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-slate-900 border border-slate-700 text-slate-300 hover:text-white transition-colors">
+              <i data-lucide="download" class="w-3.5 h-3.5"></i>
+              <span>Export</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Table Container -->
+        <div class="overflow-x-auto rounded-xl border border-slate-800">
+          <table class="w-full text-left text-xs text-slate-300">
+            <thead class="bg-slate-900/90 text-slate-400 uppercase font-mono text-[10px] tracking-wider border-b border-slate-800">
+              <tr>
+                <th class="py-3 px-4">Time</th>
+                <th class="py-3 px-4">Account</th>
+                <th class="py-3 px-4">Model & Thinking Tier</th>
+                <th class="py-3 px-4 text-right">Prompt</th>
+                <th class="py-3 px-4 text-right">Cached</th>
+                <th class="py-3 px-4 text-right text-amber-400">Thinking</th>
+                <th class="py-3 px-4 text-right">Output</th>
+                <th class="py-3 px-4 text-right">Total Tokens</th>
+                <th class="py-3 px-4 text-right">Cost (USD)</th>
+                <th class="py-3 px-4 text-right text-emerald-400">Cost (INR)</th>
+                <th class="py-3 px-4">Task / Step Preview</th>
+              </tr>
+            </thead>
+            <tbody id="logs-table-body" class="divide-y divide-slate-800/60 font-sans">
+              <!-- Rendered via JS -->
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Pagination Controls -->
+        <div class="flex items-center justify-between text-xs text-slate-400 pt-2">
+          <div>
+            Showing <span id="pagination-start" class="text-slate-200 font-medium">0</span> to <span id="pagination-end" class="text-slate-200 font-medium">0</span> of <span id="pagination-total" class="text-slate-200 font-medium">0</span> turns
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="prevPage()" id="btn-prev-page" class="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">Previous</button>
+            <span id="pagination-current-page" class="px-3 py-1.5 font-mono text-slate-200">Page 1</span>
+            <button onclick="nextPage()" id="btn-next-page" class="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">Next</button>
+          </div>
+        </div>
+
+      </section>
+
+    </main>
+
+    <!-- FOOTER -->
+    <footer class="mt-auto py-4 px-4 lg:px-8 border-t border-slate-900 text-xs text-slate-500 flex flex-wrap items-center justify-between gap-4">
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+        <span>Local Port: <strong>4848</strong> • Immutable SQLite Vault (~/.antigravity_analytics_vault/)</span>
+      </div>
+      <div>
+        Antigravity Multi-Account Token & Cost Analytics • Powered by Gemini 3.x series
+      </div>
+    </footer>
+
+  </div>
+
+  <!-- REMOTE / PHONE QR MODAL -->
+  <div id="remote-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden items-center justify-center p-4">
+    <div class="glass-card rounded-2xl p-6 max-w-md w-full border border-purple-500/30 shadow-2xl space-y-5">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="font-display font-bold text-lg text-white flex items-center gap-2">
+          <i data-lucide="smartphone" class="w-5 h-5 text-purple-400"></i> Remote & Mobile Access
+        </h3>
+        <button onclick="closeRemoteModal()" class="text-slate-400 hover:text-white">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <!-- QR Code Image -->
+      <div class="text-center space-y-3">
+        <div class="w-56 h-56 mx-auto bg-slate-900 p-2 rounded-2xl border border-slate-700 flex items-center justify-center overflow-hidden">
+          <img id="qr-code-img" src="" alt="Remote Access QR Code" class="w-full h-full object-contain rounded-xl">
+        </div>
+        <p class="text-xs text-slate-300 font-medium">Scan with your phone's camera for instant access.</p>
+      </div>
+
+      <!-- Links & PIN -->
+      <div class="space-y-2 text-xs">
+        <div class="p-2.5 bg-slate-900 rounded-xl border border-slate-800 space-y-1">
+          <div class="text-slate-400 font-medium">Active Remote URL:</div>
+          <div class="flex items-center justify-between gap-2">
+            <span id="remote-active-url" class="font-mono text-indigo-400 font-semibold truncate select-all">http://localhost:4848</span>
+            <button onclick="copyRemoteUrl()" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-[10px]">Copy</button>
+          </div>
+        </div>
+        <div class="p-2.5 bg-slate-900 rounded-xl border border-slate-800 flex items-center justify-between">
+          <span class="text-slate-400">Security PIN Code:</span>
+          <span id="remote-pin-code" class="font-mono text-white font-bold bg-slate-800 px-2 py-0.5 rounded">4848</span>
+        </div>
+      </div>
+
+      <div class="flex justify-end pt-2 border-t border-slate-800">
+        <button onclick="closeRemoteModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-xs font-medium text-white rounded-lg">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SETTINGS / ALIASES MODAL -->
+  <div id="settings-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden items-center justify-center p-4">
+    <div class="glass-card rounded-2xl p-6 max-w-xl w-full border border-slate-700 shadow-2xl space-y-5">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="font-display font-bold text-lg text-white flex items-center gap-2">
+          <i data-lucide="sliders" class="w-5 h-5 text-indigo-400"></i> Account Configuration & Currency
+        </h3>
+        <button onclick="closeSettingsModal()" class="text-slate-400 hover:text-white">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <!-- Currency Rate -->
+      <div class="space-y-2">
+        <label class="text-xs font-semibold text-slate-300">USD to INR Exchange Rate</label>
+        <div class="flex items-center gap-3">
+          <span class="text-sm font-mono text-slate-400">$1 USD = ₹</span>
+          <input type="number" step="0.5" id="settings-usd-inr" class="bg-slate-900 text-sm font-mono text-white border border-slate-700 rounded-lg px-3 py-1.5 w-32 focus:border-indigo-500 focus:outline-none">
+          <button onclick="saveCurrencyRate()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-xs font-medium text-white rounded-lg">Save Rate</button>
+        </div>
+      </div>
+
+      <!-- 5-Account Aliases -->
+      <div class="space-y-3 pt-2">
+        <label class="text-xs font-semibold text-slate-300">5-Account Aliases & Custom Tags</label>
+        <div id="settings-accounts-list" class="space-y-2.5 max-h-64 overflow-y-auto pr-1">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+
+      <div class="flex justify-end pt-3 border-t border-slate-800">
+        <button onclick="closeSettingsModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-xs font-medium text-white rounded-lg">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- JAVASCRIPT APPLICATION LOGIC -->
+  <script>
+    let currentAccountId = "all";
+    let currentDateRange = "all";
+    let currentSearch = "";
+    let currentModelFilter = "all";
+    let currentChartMetric = "tokens";
+    let currentPage = 1;
+    const PAGE_SIZE = 50;
+    let autoRefreshTimer = null;
+    let isAutoRefreshActive = true;
+    let currentLogsData = [];
+    let accountsData = [];
+
+    // Chart Instances
+    let timelineChart = null;
+    let accountsDonutChart = null;
+    let modelsBarChart = null;
+    let thinkingBudgetChart = null;
+
+    document.addEventListener("DOMContentLoaded", async () => {
+      lucide.createIcons();
+      await checkAuthStatus();
+      initCharts();
+      fetchAllData();
+      startAutoRefresh();
+    });
+
+    async function checkAuthStatus() {
+      try {
+        const res = await fetch("/api/auth/status").then(r => r.json());
+        if (!res.authenticated && !res.is_localhost) {
+          document.getElementById('pin-lock-screen').classList.remove('hidden');
+          document.getElementById('pin-lock-screen').classList.add('flex');
+        } else {
+          document.getElementById('pin-lock-screen').classList.add('hidden');
+        }
+      } catch (e) {}
+    }
+
+    async function submitPinAuth() {
+      const pin = document.getElementById('pin-input').value;
+      const res = await fetch("/api/auth/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin })
+      });
+      if (res.ok) {
+        document.getElementById('pin-lock-screen').classList.add('hidden');
+        fetchAllData();
+      } else {
+        document.getElementById('pin-error-msg').classList.remove('hidden');
+      }
+    }
+
+    function formatNumber(num) {
+      if (num === null || num === undefined) return "0";
+      return new Intl.NumberFormat().format(Math.round(num));
+    }
+
+    function formatCurrencyUSD(val) {
+      if (val === null || val === undefined) return "$0.00";
+      return "$" + val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+    }
+
+    function formatCurrencyINR(val) {
+      if (val === null || val === undefined) return "₹0.00";
+      return "₹" + val.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function timeAgo(isoString) {
+      if (!isoString) return "";
+      try {
+        const date = new Date(isoString);
+        const now = new Date();
+        const diffSec = Math.floor((now - date) / 1000);
+        if (diffSec < 60) return `${diffSec}s ago`;
+        if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+        if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+        return `${Math.floor(diffSec / 86400)}d ago`;
+      } catch (e) {
+        return isoString;
+      }
+    }
+
+    function initCharts() {
+      Chart.defaults.color = '#94a3b8';
+      Chart.defaults.font.family = 'Inter, sans-serif';
+
+      // 1. Timeline Chart
+      const ctxTimeline = document.getElementById('timelineChart').getContext('2d');
+      timelineChart = new Chart(ctxTimeline, {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [
+            {
+              label: 'Standard Output',
+              data: [],
+              borderColor: '#6366f1',
+              backgroundColor: 'rgba(99, 102, 241, 0.15)',
+              fill: true,
+              tension: 0.35,
+              pointRadius: 3,
+            },
+            {
+              label: 'Deep Reasoning / Thinking',
+              data: [],
+              borderColor: '#f59e0b',
+              backgroundColor: 'rgba(245, 158, 11, 0.15)',
+              fill: true,
+              tension: 0.35,
+              pointRadius: 3,
+            },
+            {
+              label: 'Prompt Input Tokens',
+              data: [],
+              borderColor: '#3b82f6',
+              backgroundColor: 'transparent',
+              borderDash: [4, 4],
+              tension: 0.35,
+              pointRadius: 0,
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { position: 'top', labels: { boxWidth: 12, font: { size: 11 } } },
+            tooltip: {
+              backgroundColor: '#0f172a',
+              borderColor: '#334155',
+              borderWidth: 1,
+              padding: 10,
+              bodyFont: { family: 'JetBrains Mono' }
+            }
+          },
+          scales: {
+            x: { grid: { color: '#1e293b' } },
+            y: { grid: { color: '#1e293b' }, beginAtZero: true }
+          }
+        }
+      });
+
+      // 2. Accounts Donut Chart
+      const ctxAccounts = document.getElementById('accountsDonutChart').getContext('2d');
+      accountsDonutChart = new Chart(ctxAccounts, {
+        type: 'doughnut',
+        data: {
+          labels: [],
+          datasets: [{
+            data: [],
+            backgroundColor: ['#6366f1', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'],
+            borderColor: '#0f172a',
+            borderWidth: 2,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { backgroundColor: '#0f172a', borderColor: '#334155', borderWidth: 1 }
+          },
+          cutout: '72%'
+        }
+      });
+
+      // 3. Models Bar Chart
+      const ctxModels = document.getElementById('modelsBarChart').getContext('2d');
+      modelsBarChart = new Chart(ctxModels, {
+        type: 'bar',
+        data: {
+          labels: [],
+          datasets: [{
+            label: 'Total Tokens Burned',
+            data: [],
+            backgroundColor: ['#06b6d4', '#6366f1', '#f59e0b', '#8b5cf6'],
+            borderRadius: 6,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { backgroundColor: '#0f172a', borderColor: '#334155', borderWidth: 1 }
+          },
+          scales: {
+            x: { grid: { display: false } },
+            y: { grid: { color: '#1e293b' }, beginAtZero: true }
+          }
+        }
+      });
+
+      // 4. Thinking Budget Chart
+      const ctxThinking = document.getElementById('thinkingBudgetChart').getContext('2d');
+      thinkingBudgetChart = new Chart(ctxThinking, {
+        type: 'doughnut',
+        data: {
+          labels: [],
+          datasets: [{
+            data: [],
+            backgroundColor: ['#ef4444', '#f59e0b', '#3b82f6', '#64748b'],
+            borderColor: '#0f172a',
+            borderWidth: 2,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { position: 'right', labels: { boxWidth: 12, font: { size: 11 } } },
+            tooltip: { backgroundColor: '#0f172a', borderColor: '#334155', borderWidth: 1 }
+          },
+          cutout: '60%'
+        }
+      });
+    }
+
+    async function fetchAllData() {
+      try {
+        const queryParams = `account_id=${currentAccountId}&range=${currentDateRange}`;
+        
+        const [summaryRes, accountsRes, modelsRes, timelineRes, logsRes, forexRes, backupRes] = await Promise.all([
+          fetch(`/api/summary?${queryParams}`).then(r => r.json()),
+          fetch(`/api/accounts`).then(r => r.json()),
+          fetch(`/api/models?${queryParams}`).then(r => r.json()),
+          fetch(`/api/timeline?${queryParams}`).then(r => r.json()),
+          fetch(`/api/recent-logs?limit=${PAGE_SIZE}&offset=${(currentPage - 1) * PAGE_SIZE}&${queryParams}&model=${currentModelFilter}&search=${encodeURIComponent(currentSearch)}`).then(r => r.json()),
+          fetch(`/api/forex`).then(r => r.json()),
+          fetch(`/api/backup`).then(r => r.json()),
+        ]);
+
+        renderSummary(summaryRes);
+        renderAccounts(accountsRes.accounts);
+        renderModels(modelsRes);
+        renderTimeline(timelineRes.timeline);
+        renderLogs(logsRes);
+        renderForex(forexRes);
+        renderBackup(backupRes, summaryRes);
+
+        document.getElementById('last-sync-time').innerText = new Date().toLocaleTimeString();
+      } catch (err) {
+        console.error("Fetch error:", err);
+      }
+    }
+
+    function renderSummary(data) {
+      if (!data) return;
+      document.getElementById('hero-cost-usd').innerText = formatCurrencyUSD(data.total_cost_usd);
+      document.getElementById('hero-cost-inr').innerText = formatCurrencyINR(data.total_cost_inr);
+      document.getElementById('rate-badge').innerText = data.usd_to_inr ? data.usd_to_inr.toFixed(2) : "87.00";
+      
+      document.getElementById('hero-turn-count').innerText = formatNumber(data.total_turns);
+      document.getElementById('hero-session-count').innerText = formatNumber(data.active_sessions_count);
+
+      document.getElementById('hero-total-tokens').innerText = formatNumber(data.total_tokens);
+      document.getElementById('hero-prompt-tokens').innerText = formatNumber(data.total_prompt_tokens);
+      document.getElementById('hero-cached-tokens').innerText = formatNumber(data.total_cached_tokens);
+      document.getElementById('hero-output-tokens').innerText = formatNumber(data.total_standard_output_tokens);
+
+      document.getElementById('hero-thinking-tokens').innerText = formatNumber(data.total_thinking_tokens);
+      const intensity = data.thinking_intensity_pct || 0;
+      document.getElementById('thinking-intensity-badge').innerText = `${intensity}% Reasoning Share`;
+      document.getElementById('thinking-progress-bar').style.width = `${Math.min(100, intensity)}%`;
+
+      document.getElementById('settings-usd-inr').value = data.usd_to_inr || 87.0;
+    }
+
+    function renderForex(data) {
+      if (!data || !data.rate) return;
+      document.getElementById('header-forex-rate').innerText = parseFloat(data.rate).toFixed(2);
+    }
+
+    function renderBackup(bData, sData) {
+      if (sData && sData.total_turns) {
+        document.getElementById('vault-turns-count').innerText = formatNumber(sData.total_turns);
+      }
+      if (sData && sData.db_size_bytes) {
+        const mb = (sData.db_size_bytes / (1024 * 1024)).toFixed(1);
+        document.getElementById('vault-db-size').innerText = `${mb} MB`;
+      }
+      if (bData && bData.last_backup_time) {
+        document.getElementById('vault-last-backup').innerText = timeAgo(bData.last_backup_time);
+      }
+    }
+
+    function renderAccounts(accounts) {
+      if (!accounts) return;
+      accountsData = accounts;
+
+      const barContainer = document.getElementById('accounts-fleet-bar');
+      barContainer.innerHTML = accounts.map(acc => {
+        const isSelected = currentAccountId === acc.account_id;
+        return `
+          <button onclick="selectAccount('${acc.account_id}')" class="flex items-center gap-2 px-3 py-1.5 rounded-xl border transition-all ${
+            isSelected 
+              ? 'bg-slate-800 border-indigo-500 shadow-md shadow-indigo-500/20' 
+              : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
+          }">
+            <span class="w-2.5 h-2.5 rounded-full" style="background-color: ${acc.color || '#6366f1'}"></span>
+            <div class="text-left">
+              <div class="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                <span>${acc.account_alias_or_hash}</span>
+                <span class="text-[10px] font-mono text-slate-400">(${acc.load_pct || 0}%)</span>
+              </div>
+              <div class="text-[10px] text-slate-400 font-mono">
+                ${formatNumber(acc.total_tokens)} tok • ${formatCurrencyUSD(acc.cost_usd)}
+              </div>
+            </div>
+          </button>
+        `;
+      }).join('');
+
+      if (accountsDonutChart) {
+        accountsDonutChart.data.labels = accounts.map(a => a.account_alias_or_hash);
+        accountsDonutChart.data.datasets[0].data = accounts.map(a => a.total_tokens);
+        accountsDonutChart.data.datasets[0].backgroundColor = accounts.map(a => a.color || '#6366f1');
+        accountsDonutChart.update();
+      }
+
+      const legend = document.getElementById('accounts-legend');
+      legend.innerHTML = accounts.map(a => `
+        <div class="flex items-center justify-between py-1 border-b border-slate-800/50">
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full" style="background-color: ${a.color}"></span>
+            <span class="text-slate-300 font-medium truncate max-w-[140px]">${a.account_alias_or_hash}</span>
+          </div>
+          <span class="font-mono text-slate-400">${a.load_pct}% (${formatCurrencyUSD(a.cost_usd)})</span>
+        </div>
+      `).join('');
+
+      const settingsList = document.getElementById('settings-accounts-list');
+      settingsList.innerHTML = accounts.map(a => `
+        <div class="flex items-center justify-between gap-3 p-2 bg-slate-900 border border-slate-800 rounded-lg">
+          <div class="flex items-center gap-2 flex-1">
+            <input type="color" value="${a.color}" id="color-${a.account_id}" class="w-6 h-6 rounded bg-transparent border-0 cursor-pointer">
+            <input type="text" value="${a.account_alias_or_hash}" id="alias-${a.account_id}" class="bg-slate-950 text-xs text-white border border-slate-700 rounded px-2.5 py-1 flex-1">
+          </div>
+          <button onclick="saveAccountAlias('${a.account_id}')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-[11px] text-indigo-400 font-medium rounded">Save</button>
+        </div>
+      `).join('');
+    }
+
+    function renderTimeline(timeline) {
+      if (!timelineChart || !timeline) return;
+      
+      const labels = timeline.map(t => t.date);
+      let ds0 = [], ds1 = [], ds2 = [];
+
+      if (currentChartMetric === 'tokens') {
+        ds0 = timeline.map(t => t.standard_output_tokens);
+        ds1 = timeline.map(t => t.thinking_tokens);
+        ds2 = timeline.map(t => t.prompt_tokens);
+        timelineChart.data.datasets[0].label = 'Standard Output Tokens';
+        timelineChart.data.datasets[1].label = 'Deep Reasoning Tokens';
+        timelineChart.data.datasets[2].label = 'Prompt Input Tokens';
+      } else if (currentChartMetric === 'thinking') {
+        ds0 = [];
+        ds1 = timeline.map(t => t.thinking_tokens);
+        ds2 = [];
+        timelineChart.data.datasets[0].label = '';
+        timelineChart.data.datasets[1].label = 'Deep Reasoning Tokens';
+        timelineChart.data.datasets[2].label = '';
+      } else if (currentChartMetric === 'usd') {
+        ds0 = timeline.map(t => t.cost_usd);
+        ds1 = [];
+        ds2 = [];
+        timelineChart.data.datasets[0].label = 'Theoretical Spend ($ USD)';
+        timelineChart.data.datasets[1].label = '';
+        timelineChart.data.datasets[2].label = '';
+      } else if (currentChartMetric === 'inr') {
+        ds0 = timeline.map(t => t.cost_inr);
+        ds1 = [];
+        ds2 = [];
+        timelineChart.data.datasets[0].label = 'Theoretical Spend (₹ INR)';
+        timelineChart.data.datasets[1].label = '';
+        timelineChart.data.datasets[2].label = '';
+      }
+
+      timelineChart.data.labels = labels;
+      timelineChart.data.datasets[0].data = ds0;
+      timelineChart.data.datasets[1].data = ds1;
+      timelineChart.data.datasets[2].data = ds2;
+      timelineChart.update();
+    }
+
+    function renderModels(data) {
+      if (!data) return;
+
+      if (modelsBarChart && data.models) {
+        modelsBarChart.data.labels = data.models.map(m => m.model_name.replace(' (High)', '').replace(' (Medium)', '').replace(' (Low)', ''));
+        modelsBarChart.data.datasets[0].data = data.models.map(m => m.total_tokens);
+        modelsBarChart.update();
+      }
+
+      if (thinkingBudgetChart && data.thinking_budgets) {
+        thinkingBudgetChart.data.labels = data.thinking_budgets.map(b => `${b.thinking_level} (${b.turn_count} turns)`);
+        thinkingBudgetChart.data.datasets[0].data = data.thinking_budgets.map(b => b.total_thinking_tokens || b.total_tokens);
+        thinkingBudgetChart.update();
+      }
+    }
+
+    function renderLogs(logsData) {
+      if (!logsData) return;
+      currentLogsData = logsData.logs || [];
+      const tbody = document.getElementById('logs-table-body');
+      
+      if (currentLogsData.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="11" class="py-8 text-center text-slate-500 font-medium">
+              No matching activity logs found.
+            </td>
+          </tr>
+        `;
+        return;
+      }
+
+      tbody.innerHTML = currentLogsData.map(row => {
+        const thinkTier = row.thinking_level || 'None';
+        let tierPillClass = 'bg-slate-800 text-slate-400';
+        if (thinkTier === 'High') tierPillClass = 'bg-rose-500/10 text-rose-400 border border-rose-500/20';
+        if (thinkTier === 'Medium') tierPillClass = 'bg-amber-500/10 text-amber-400 border border-amber-500/20';
+        if (thinkTier === 'Low') tierPillClass = 'bg-blue-500/10 text-blue-400 border border-blue-500/20';
+
+        return `
+          <tr class="hover:bg-slate-900/60 transition-colors">
+            <td class="py-2.5 px-4 font-mono text-[11px] text-slate-400" title="${row.timestamp}">
+              ${timeAgo(row.timestamp)}
+            </td>
+            <td class="py-2.5 px-4">
+              <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-medium" style="background-color: ${row.account_color}15; color: ${row.account_color}; border: 1px solid ${row.account_color}30">
+                <span class="w-1.5 h-1.5 rounded-full" style="background-color: ${row.account_color}"></span>
+                ${row.account_alias_or_hash || row.account_id}
+              </span>
+            </td>
+            <td class="py-2.5 px-4">
+              <div class="flex items-center gap-1.5">
+                <span class="font-medium text-slate-200">${row.model_name}</span>
+                <span class="px-1.5 py-0.5 rounded text-[10px] font-mono ${tierPillClass}">${thinkTier}</span>
+              </div>
+            </td>
+            <td class="py-2.5 px-4 text-right font-mono text-slate-400">${formatNumber(row.prompt_tokens)}</td>
+            <td class="py-2.5 px-4 text-right font-mono text-slate-400">${formatNumber(row.cached_tokens)}</td>
+            <td class="py-2.5 px-4 text-right font-mono font-semibold text-amber-400">${formatNumber(row.reasoning_thinking_tokens)}</td>
+            <td class="py-2.5 px-4 text-right font-mono text-slate-300">${formatNumber(row.output_tokens)}</td>
+            <td class="py-2.5 px-4 text-right font-mono font-bold text-white">${formatNumber(row.total_tokens)}</td>
+            <td class="py-2.5 px-4 text-right font-mono text-slate-200">${formatCurrencyUSD(row.cost_usd)}</td>
+            <td class="py-2.5 px-4 text-right font-mono font-medium text-emerald-400">${formatCurrencyINR(row.cost_inr)}</td>
+            <td class="py-2.5 px-4 max-w-xs truncate text-slate-400 text-[11px]" title="${row.prompt_preview}">
+              ${row.prompt_preview || 'Agent step execution'}
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      const total = logsData.total || 0;
+      const start = total === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
+      const end = Math.min(total, currentPage * PAGE_SIZE);
+      document.getElementById('pagination-start').innerText = start;
+      document.getElementById('pagination-end').innerText = end;
+      document.getElementById('pagination-total').innerText = total;
+      document.getElementById('pagination-current-page').innerText = `Page ${currentPage}`;
+
+      document.getElementById('btn-prev-page').disabled = currentPage <= 1;
+      document.getElementById('btn-next-page').disabled = end >= total;
+    }
+
+    function selectAccount(accId) {
+      currentAccountId = accId;
+      document.getElementById('account-filter').value = accId;
+      currentPage = 1;
+      fetchAllData();
+    }
+
+    function onAccountChange() {
+      currentAccountId = document.getElementById('account-filter').value;
+      currentPage = 1;
+      fetchAllData();
+    }
+
+    function setDateRange(range) {
+      currentDateRange = range;
+      ['24h', '7d', '30d', 'all'].forEach(r => {
+        const btn = document.getElementById(`range-${r}`);
+        if (r === range) {
+          btn.className = 'px-2.5 py-1.5 rounded-md bg-indigo-600 text-white shadow-sm';
+        } else {
+          btn.className = 'px-2.5 py-1.5 rounded-md text-slate-400 hover:text-slate-200 transition-colors';
+        }
+      });
+      currentPage = 1;
+      fetchAllData();
+    }
+
+    function setChartMetric(metric) {
+      currentChartMetric = metric;
+      ['tokens', 'thinking', 'usd', 'inr'].forEach(m => {
+        const btn = document.getElementById(`metric-btn-${m}`);
+        if (m === metric) {
+          btn.className = 'px-2.5 py-1 rounded-md bg-indigo-600 text-white';
+        } else {
+          btn.className = 'px-2.5 py-1 rounded-md text-slate-400 hover:text-white';
+        }
+      });
+      fetchAllData();
+    }
+
+    function handleSearchKey(event) {
+      if (event.key === 'Enter' || event.target.value === '') {
+        currentSearch = event.target.value;
+        currentPage = 1;
+        fetchAllData();
+      }
+    }
+
+    function onFilterChange() {
+      currentModelFilter = document.getElementById('log-model-filter').value;
+      currentPage = 1;
+      fetchAllData();
+    }
+
+    function prevPage() {
+      if (currentPage > 1) {
+        currentPage--;
+        fetchAllData();
+      }
+    }
+
+    function nextPage() {
+      currentPage++;
+      fetchAllData();
+    }
+
+    function toggleAutoRefresh() {
+      isAutoRefreshActive = !isAutoRefreshActive;
+      const btn = document.getElementById('btn-auto-refresh');
+      const icon = document.getElementById('icon-refresh');
+      if (isAutoRefreshActive) {
+        btn.className = 'flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-slate-900 border border-slate-800 text-emerald-400 hover:border-slate-700 transition-all';
+        icon.classList.add('animate-spin');
+        startAutoRefresh();
+      } else {
+        btn.className = 'flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-slate-900 border border-slate-800 text-slate-400 hover:border-slate-700 transition-all';
+        icon.classList.remove('animate-spin');
+        clearInterval(autoRefreshTimer);
+      }
+    }
+
+    function startAutoRefresh() {
+      clearInterval(autoRefreshTimer);
+      autoRefreshTimer = setInterval(() => {
+        if (isAutoRefreshActive) fetchAllData();
+      }, 5000);
+    }
+
+    async function triggerHistoricalScan() {
+      const icon = document.getElementById('icon-deep-scan');
+      icon.classList.add('animate-spin');
+      try {
+        const res = await fetch('/api/historical-scan', { method: 'POST' }).then(r => r.json());
+        alert(`Deep Historical Crawl Complete!\nRecovered: ${res.new_turns_recovered} new turns across ${res.files_examined} files.\nTotal Lifetime Turns: ${res.total_stored_turns}`);
+        await fetchAllData();
+      } catch (e) {
+        alert("Historical scan failed: " + e);
+      } finally {
+        icon.classList.remove('animate-spin');
+      }
+    }
+
+    async function refreshForexLive() {
+      const icon = document.getElementById('icon-forex-refresh');
+      icon.classList.add('animate-spin');
+      try {
+        await fetch('/api/forex/refresh', { method: 'POST' });
+        await fetchAllData();
+      } catch (e) {
+      } finally {
+        icon.classList.remove('animate-spin');
+      }
+    }
+
+    async function triggerManualBackup() {
+      try {
+        const res = await fetch('/api/backup/create', { method: 'POST' }).then(r => r.json());
+        alert(`Vault Snapshot Created Successfully!\nSaved in ~/.antigravity_analytics_vault/backups/\nRecords: ${res.snapshot.record_count}`);
+        await fetchAllData();
+      } catch (e) {
+        alert("Backup failed: " + e);
+      }
+    }
+
+    async function openRemoteModal() {
+      try {
+        const tData = await fetch('/api/tunnel').then(r => r.json());
+        document.getElementById('remote-active-url').innerText = tData.active_remote_url;
+        document.getElementById('remote-pin-code').innerText = tData.pin_code || '4848';
+        document.getElementById('qr-code-img').src = tData.qr_code_uri;
+        document.getElementById('remote-modal').classList.remove('hidden');
+        document.getElementById('remote-modal').classList.add('flex');
+      } catch (e) {
+        alert("Tunnel error: " + e);
+      }
+    }
+
+    function closeRemoteModal() {
+      document.getElementById('remote-modal').classList.add('hidden');
+      document.getElementById('remote-modal').classList.remove('flex');
+    }
+
+    function copyRemoteUrl() {
+      const url = document.getElementById('remote-active-url').innerText;
+      navigator.clipboard.writeText(url);
+      alert("Remote URL copied to clipboard:\n" + url);
+    }
+
+    function openSettingsModal() {
+      document.getElementById('settings-modal').classList.remove('hidden');
+      document.getElementById('settings-modal').classList.add('flex');
+    }
+
+    function closeSettingsModal() {
+      document.getElementById('settings-modal').classList.add('hidden');
+      document.getElementById('settings-modal').classList.remove('flex');
+    }
+
+    async function saveCurrencyRate() {
+      const rate = parseFloat(document.getElementById('settings-usd-inr').value);
+      if (rate > 0) {
+        await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ usd_to_inr: rate })
+        });
+        fetchAllData();
+      }
+    }
+
+    async function saveAccountAlias(accId) {
+      const alias = document.getElementById(`alias-${accId}`).value;
+      const color = document.getElementById(`color-${accId}`).value;
+      await fetch('/api/accounts/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_id: accId, alias, color })
+      });
+      fetchAllData();
+    }
+
+    function exportLogsCSV() {
+      if (!currentLogsData || currentLogsData.length === 0) return;
+      const headers = ["Timestamp", "Account", "Model", "Thinking Level", "Prompt Tokens", "Cached Tokens", "Thinking Tokens", "Output Tokens", "Total Tokens", "Cost USD", "Cost INR", "Preview"];
+      const rows = currentLogsData.map(l => [
+        l.timestamp,
+        `"${l.account_alias_or_hash || l.account_id}"`,
+        `"${l.model_name}"`,
+        l.thinking_level,
+        l.prompt_tokens,
+        l.cached_tokens,
+        l.reasoning_thinking_tokens,
+        l.output_tokens,
+        l.total_tokens,
+        l.cost_usd,
+        l.cost_inr,
+        `"${(l.prompt_preview || '').replace(/"/g, '""')}"`
+      ]);
+      const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `antigravity_vault_logs_${new Date().toISOString().slice(0, 10)}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  </script>
+</body>
+</html>
