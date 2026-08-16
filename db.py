@@ -1,6 +1,7 @@
 """
 SQLite Database Layer for Antigravity Multi-Account Token & Cost Analytics.
-Thread-safe, WAL-enabled, with SHA256 Turn Deduplication & Permanent Storage Immutability.
+Thread-safe, WAL-enabled, with SHA256 Turn Deduplication & Explicit Estimation Metadata.
+Includes Security Audit Logs and System Error Observability Tables.
 """
 
 import sqlite3
@@ -8,10 +9,14 @@ import json
 import os
 import hashlib
 import threading
+import traceback
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
-from config import DATABASE_PATH, DEFAULT_ACCOUNTS, DEFAULT_USD_TO_INR, calculate_turn_cost
+from config import DATABASE_PATH, DEFAULT_ACCOUNTS, DEFAULT_USD_TO_INR
+from pricing_engine import calculate_turn_cost
+from logger import get_logger, log_error
 
+logger = get_logger("db")
 _lock = threading.RLock()
 
 
@@ -72,7 +77,7 @@ def init_db(db_path: str = DATABASE_PATH):
         );
         """)
 
-        # Token logs table with turn_hash for absolute deduplication
+        # Token logs table with estimation confidence and data source metadata
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS token_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,17 +97,21 @@ def init_db(db_path: str = DATABASE_PATH):
             step_index INTEGER DEFAULT 0,
             prompt_preview TEXT,
             metadata_json TEXT,
+            is_estimated INTEGER DEFAULT 1,
+            estimation_confidence TEXT DEFAULT 'heuristic_char',
+            data_source TEXT DEFAULT 'live_transcript',
+            account_attribution_mode TEXT DEFAULT 'workspace_bucket',
             FOREIGN KEY (session_id) REFERENCES sessions (session_id),
             FOREIGN KEY (account_id) REFERENCES accounts (account_id)
         );
         """)
 
-        # Schema Migrations: Add turn_hash if upgrading an existing db
+        # Schema Migrations: Add missing columns if upgrading existing db
         cursor.execute("PRAGMA table_info(token_logs);")
         columns = [col[1] for col in cursor.fetchall()]
+        
         if "turn_hash" not in columns:
             cursor.execute("ALTER TABLE token_logs ADD COLUMN turn_hash TEXT;")
-            # Populate existing rows with backfilled hashes
             cursor.execute("SELECT id, session_id, timestamp, prompt_tokens, output_tokens, model_name, step_index, prompt_preview FROM token_logs")
             for row in cursor.fetchall():
                 th = compute_turn_hash(
@@ -116,7 +125,16 @@ def init_db(db_path: str = DATABASE_PATH):
                 )
                 cursor.execute("UPDATE token_logs SET turn_hash = ? WHERE id = ?", (th, row["id"]))
 
-        # Unique Index on turn_hash
+        if "is_estimated" not in columns:
+            cursor.execute("ALTER TABLE token_logs ADD COLUMN is_estimated INTEGER DEFAULT 1;")
+        if "estimation_confidence" not in columns:
+            cursor.execute("ALTER TABLE token_logs ADD COLUMN estimation_confidence TEXT DEFAULT 'heuristic_char';")
+        if "data_source" not in columns:
+            cursor.execute("ALTER TABLE token_logs ADD COLUMN data_source TEXT DEFAULT 'live_transcript';")
+        if "account_attribution_mode" not in columns:
+            cursor.execute("ALTER TABLE token_logs ADD COLUMN account_attribution_mode TEXT DEFAULT 'workspace_bucket';")
+
+        # Indexes
         cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_logs_turn_hash ON token_logs (turn_hash);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON token_logs (timestamp);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_account ON token_logs (account_id);")
@@ -130,11 +148,16 @@ def init_db(db_path: str = DATABASE_PATH):
             file_hash TEXT,
             last_byte_offset INTEGER DEFAULT 0,
             last_mtime REAL DEFAULT 0,
-            last_synced_at TEXT
+            last_synced_at TEXT,
+            last_error TEXT
         );
         """)
+        cursor.execute("PRAGMA table_info(sync_state);")
+        sync_cols = [col[1] for col in cursor.fetchall()]
+        if "last_error" not in sync_cols:
+            cursor.execute("ALTER TABLE sync_state ADD COLUMN last_error TEXT;")
 
-        # Backups Audit table
+        # Backups Audit table with checksum column
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS backups (
             backup_id TEXT PRIMARY KEY,
@@ -143,9 +166,17 @@ def init_db(db_path: str = DATABASE_PATH):
             file_size_bytes INTEGER DEFAULT 0,
             record_count INTEGER DEFAULT 0,
             backup_type TEXT DEFAULT 'sqlite',
+            checksum_sha256 TEXT,
+            integrity_verified INTEGER DEFAULT 0,
             created_at TEXT NOT NULL
         );
         """)
+        cursor.execute("PRAGMA table_info(backups);")
+        backup_cols = [col[1] for col in cursor.fetchall()]
+        if "checksum_sha256" not in backup_cols:
+            cursor.execute("ALTER TABLE backups ADD COLUMN checksum_sha256 TEXT;")
+        if "integrity_verified" not in backup_cols:
+            cursor.execute("ALTER TABLE backups ADD COLUMN integrity_verified INTEGER DEFAULT 0;")
 
         # Forex Rates Cache table
         cursor.execute("""
@@ -164,6 +195,32 @@ def init_db(db_path: str = DATABASE_PATH):
             value TEXT
         );
         """)
+
+        # Auth Audit Logs Table (Issue 31)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS auth_audit_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            client_ip TEXT NOT NULL,
+            endpoint TEXT NOT NULL,
+            status TEXT NOT NULL,
+            details TEXT
+        );
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_auth_audit_ts ON auth_audit_logs (timestamp);")
+
+        # System Errors Observability Table (Issue 29)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS system_errors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            module TEXT NOT NULL,
+            error_message TEXT NOT NULL,
+            error_type TEXT,
+            stack_trace TEXT
+        );
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_errors_ts ON system_errors (timestamp);")
 
         cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('usd_to_inr', ?)", (str(DEFAULT_USD_TO_INR),))
         cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('daemon_status', 'active')")
@@ -199,7 +256,8 @@ def verify_db_integrity(db_path: str = DATABASE_PATH) -> bool:
         res = cur.fetchone()[0]
         conn.close()
         return res == "ok"
-    except Exception:
+    except Exception as e:
+        logger.error(f"DB integrity check failed: {e}")
         return False
 
 
@@ -274,7 +332,7 @@ def upsert_session(
 
 
 def insert_token_log(log_entry: Dict[str, Any], db_path: str = DATABASE_PATH) -> Optional[int]:
-    """Insert a single turn token log using immutable SHA256 turn_hash."""
+    """Insert a single turn token log using immutable SHA256 turn_hash with explicit estimation tags."""
     turn_hash = log_entry.get("turn_hash")
     if not turn_hash:
         turn_hash = compute_turn_hash(
@@ -294,8 +352,9 @@ def insert_token_log(log_entry: Dict[str, Any], db_path: str = DATABASE_PATH) ->
         INSERT OR IGNORE INTO token_logs (
             turn_hash, session_id, account_id, timestamp, model_name, thinking_level,
             prompt_tokens, cached_tokens, reasoning_thinking_tokens, output_tokens,
-            total_tokens, cost_usd, cost_inr, step_index, prompt_preview, metadata_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            total_tokens, cost_usd, cost_inr, step_index, prompt_preview, metadata_json,
+            is_estimated, estimation_confidence, data_source, account_attribution_mode
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             turn_hash,
             log_entry.get("session_id"),
@@ -313,6 +372,10 @@ def insert_token_log(log_entry: Dict[str, Any], db_path: str = DATABASE_PATH) ->
             log_entry.get("step_index", 0),
             log_entry.get("prompt_preview", ""),
             json.dumps(log_entry.get("metadata", {})),
+            1 if log_entry.get("is_estimated", True) else 0,
+            log_entry.get("estimation_confidence", "heuristic_char"),
+            log_entry.get("data_source", "live_transcript"),
+            log_entry.get("account_attribution_mode", "workspace_bucket"),
         ))
         log_id = cur.lastrowid
         conn.commit()
@@ -337,24 +400,102 @@ def update_sync_state(
     file_hash: str,
     byte_offset: int,
     mtime: float,
+    last_error: Optional[str] = None,
     db_path: str = DATABASE_PATH,
 ):
-    """Update file sync offset and hash."""
+    """Update file sync offset and hash with optional error tracking."""
     now_iso = datetime.utcnow().isoformat() + "Z"
     with _lock:
         conn = get_db_connection(db_path)
         cur = conn.cursor()
         cur.execute("""
-        INSERT INTO sync_state (file_path, file_hash, last_byte_offset, last_mtime, last_synced_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO sync_state (file_path, file_hash, last_byte_offset, last_mtime, last_synced_at, last_error)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(file_path) DO UPDATE SET
             file_hash = excluded.file_hash,
             last_byte_offset = excluded.last_byte_offset,
             last_mtime = excluded.last_mtime,
-            last_synced_at = excluded.last_synced_at
-        """, (file_path, file_hash, byte_offset, mtime, now_iso))
+            last_synced_at = excluded.last_synced_at,
+            last_error = excluded.last_error
+        """, (file_path, file_hash, byte_offset, mtime, now_iso, last_error))
         conn.commit()
         conn.close()
+
+
+def record_auth_audit_event(
+    client_ip: str,
+    endpoint: str,
+    status: str,
+    details: Optional[str] = None,
+    db_path: str = DATABASE_PATH,
+):
+    """Records an authentication or authorization event for security auditing."""
+    try:
+        now_iso = datetime.utcnow().isoformat() + "Z"
+        with _lock:
+            conn = get_db_connection(db_path)
+            cur = conn.cursor()
+            cur.execute("""
+            INSERT INTO auth_audit_logs (timestamp, client_ip, endpoint, status, details)
+            VALUES (?, ?, ?, ?, ?)
+            """, (now_iso, client_ip, endpoint, status, details))
+            conn.commit()
+            conn.close()
+    except Exception as e:
+        logger.warning(f"Could not record auth audit: {e}")
+
+
+def get_recent_auth_audits(limit: int = 50, db_path: str = DATABASE_PATH) -> List[Dict[str, Any]]:
+    """Retrieve recent authentication audit records."""
+    try:
+        conn = get_db_connection(db_path)
+        cur = conn.cursor()
+        cur.execute("""
+        SELECT * FROM auth_audit_logs ORDER BY id DESC LIMIT ?
+        """, (limit,))
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return rows
+    except Exception:
+        return []
+
+
+def record_system_error_to_db(
+    module: str,
+    error_message: str,
+    error_type: Optional[str] = None,
+    stack_trace: Optional[str] = None,
+    db_path: str = DATABASE_PATH,
+):
+    """Records a system or parsing error to SQLite for persistent observability."""
+    try:
+        now_iso = datetime.utcnow().isoformat() + "Z"
+        with _lock:
+            conn = get_db_connection(db_path)
+            cur = conn.cursor()
+            cur.execute("""
+            INSERT INTO system_errors (timestamp, module, error_message, error_type, stack_trace)
+            VALUES (?, ?, ?, ?, ?)
+            """, (now_iso, module, error_message, error_type, stack_trace))
+            conn.commit()
+            conn.close()
+    except Exception as e:
+        logger.error(f"Could not persist system error: {e}")
+
+
+def get_recent_db_errors(limit: int = 50, db_path: str = DATABASE_PATH) -> List[Dict[str, Any]]:
+    """Retrieve recent recorded system errors from the database."""
+    try:
+        conn = get_db_connection(db_path)
+        cur = conn.cursor()
+        cur.execute("""
+        SELECT * FROM system_errors ORDER BY id DESC LIMIT ?
+        """, (limit,))
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return rows
+    except Exception:
+        return []
 
 
 def _build_filter_clause(
@@ -382,7 +523,7 @@ def _build_filter_clause(
 
     if date_range and date_range != "all":
         now = datetime.utcnow()
-        if date_range == "24h" or date_range == "1d":
+        if date_range in ("24h", "1d"):
             start_date = (now - timedelta(days=1)).isoformat() + "Z"
         elif date_range == "7d":
             start_date = (now - timedelta(days=7)).isoformat() + "Z"
@@ -441,6 +582,7 @@ def get_summary_stats(
 
     row["total_savings_usd"] = row["total_cost_usd"]
     row["total_savings_inr"] = row["total_cost_inr"]
+    row["cost_is_estimated"] = True  # Explicit estimation indicator
 
     # Database file size & health
     row["db_size_bytes"] = os.path.getsize(db_path) if os.path.exists(db_path) else 0
@@ -585,9 +727,10 @@ def get_recent_logs(
     account_filter: Optional[str] = None,
     model_filter: Optional[str] = None,
     search: Optional[str] = None,
+    sanitize_paths: bool = True,
     db_path: str = DATABASE_PATH,
 ) -> Dict[str, Any]:
-    """Retrieve paginated live log feed."""
+    """Retrieve paginated live log feed with optional path sanitization for privacy."""
     where_sql, params = _build_filter_clause(
         account_filter=account_filter,
         model_filter=model_filter,
@@ -613,9 +756,23 @@ def get_recent_logs(
     """
     cur.execute(sql, params + [limit, offset])
     rows = []
+    user_home = str(os.path.expanduser("~"))
+
     for r in cur.fetchall():
         d = dict(r)
         d["cost_inr"] = round(d["cost_usd"] * usd_to_inr, 4)
+
+        # Sanitize personal directory paths in metadata if requested
+        if sanitize_paths and d.get("metadata_json"):
+            try:
+                meta = json.loads(d["metadata_json"])
+                for k, v in list(meta.items()):
+                    if isinstance(v, str) and user_home in v:
+                        meta[k] = v.replace(user_home, "~")
+                d["metadata_json"] = json.dumps(meta)
+            except Exception:
+                pass
+
         rows.append(d)
 
     conn.close()
@@ -707,7 +864,7 @@ def seed_synthetic_data(db_path: str = DATABASE_PATH):
                 account_id=acc["account_id"],
                 model_name=model_info,
                 thinking_level=thinking_lvl,
-                workspace_path=str(Path.home() / "Projects" / acc['account_alias_or_hash'].split()[0]),
+                workspace_path=str(os.path.expanduser("~") + f"/Projects/{acc['account_alias_or_hash'].split()[0]}"),
                 timestamp=log_time,
                 db_path=db_path,
             )
@@ -729,6 +886,10 @@ def seed_synthetic_data(db_path: str = DATABASE_PATH):
                 "step_index": random.randint(1, 20),
                 "prompt_preview": task_snippet,
                 "metadata": {"synthetic": True, "task": task_snippet},
+                "is_estimated": 1,
+                "estimation_confidence": "heuristic_char",
+                "data_source": "synthetic_seed",
+                "account_attribution_mode": "workspace_bucket",
             }, db_path=db_path)
 
 

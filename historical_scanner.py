@@ -1,7 +1,7 @@
 """
 Deep Historical Telemetry Crawler for Antigravity & Gemini.
 Scans legacy brain folders, globalStorage, workspaceStorage SQLite DBs, and Temp caches.
-Idempotently backfills missing past usage with SHA256 turn deduplication.
+Idempotently backfills missing past usage with SHA256 turn deduplication and clear inference flags.
 """
 
 import os
@@ -17,11 +17,14 @@ from datetime import datetime
 
 from config import (
     HISTORICAL_DISCOVERY_ROOTS,
+    DATABASE_PATH,
+)
+from pricing_engine import (
     normalize_model_name,
     parse_thinking_level,
     calculate_turn_cost,
+    estimate_tokens,
     THINKING_BUDGET_ESTIMATES,
-    DATABASE_PATH,
 )
 from db import (
     get_db_connection,
@@ -31,7 +34,10 @@ from db import (
     compute_turn_hash,
     _lock,
 )
-from telemetry_parser import estimate_tokens, hash_to_account_id
+from telemetry_parser import hash_to_account_id
+from logger import get_logger, log_error
+
+logger = get_logger("historical")
 
 
 def scan_workspace_storage_sqlite(db_path: Path, conn: sqlite3.Connection) -> int:
@@ -41,7 +47,7 @@ def scan_workspace_storage_sqlite(db_path: Path, conn: sqlite3.Connection) -> in
     
     turns_found = 0
     try:
-        source_conn = sqlite3.connect(str(db_path), timeout=1.0)
+        source_conn = sqlite3.connect(str(db_path), timeout=2.0)
         source_cur = source_conn.cursor()
         source_cur.execute("SELECT key, value FROM ItemTable WHERE key LIKE '%antigravity%' OR key LIKE '%gemini%' OR key LIKE '%chat%' OR key LIKE '%conversation%'")
         rows = source_cur.fetchall()
@@ -52,14 +58,13 @@ def scan_workspace_storage_sqlite(db_path: Path, conn: sqlite3.Connection) -> in
             val_str = str(val)
             # Check for JSON chat or transcript traces
             if "PLANNER_RESPONSE" in val_str or "USER_INPUT" in val_str or "Model Selection" in val_str:
-                # Extract potential JSON lines
                 json_matches = re.findall(r'\{[^{}]*"type"\s*:\s*"(?:PLANNER_RESPONSE|USER_INPUT)"[^{}]*\}', val_str)
                 for j_str in json_matches:
                     try:
                         d = json.loads(j_str)
                         if d.get("type") == "PLANNER_RESPONSE":
                             content = str(d.get("content", ""))
-                            out_tok = estimate_tokens(content)
+                            out_tok, _ = estimate_tokens(content)
                             if out_tok > 5:
                                 session_id = f"legacy_vscdb_{db_path.parent.name[:12]}"
                                 timestamp = d.get("created_at") or datetime.utcnow().isoformat() + "Z"
@@ -73,24 +78,26 @@ def scan_workspace_storage_sqlite(db_path: Path, conn: sqlite3.Connection) -> in
                                 INSERT OR IGNORE INTO token_logs (
                                     turn_hash, session_id, account_id, timestamp, model_name, thinking_level,
                                     prompt_tokens, cached_tokens, reasoning_thinking_tokens, output_tokens,
-                                    total_tokens, cost_usd, cost_inr, step_index, prompt_preview, metadata_json
-                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    total_tokens, cost_usd, cost_inr, step_index, prompt_preview, metadata_json,
+                                    is_estimated, estimation_confidence, data_source, account_attribution_mode
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 """, (
                                     th, session_id, acc_id, timestamp, model_name, "High",
                                     2500, 0, think_tok, out_tok, t_tot, c_usd, c_inr, 0,
-                                    "Recovered from workspaceStorage", json.dumps({"source": str(db_path)})
+                                    "Recovered from workspaceStorage", json.dumps({"source": str(db_path)}),
+                                    1, "synthetic_infer", "vscdb_trace", "workspace_bucket"
                                 ))
                                 if cur.rowcount > 0:
                                     turns_found += 1
-                    except Exception:
-                        pass
-    except Exception:
-        pass
+                    except Exception as e:
+                        logger.debug(f"JSON match parsing skipped: {e}")
+    except Exception as e:
+        logger.debug(f"Could not read state.vscdb {db_path}: {e}")
     return turns_found
 
 
 def scan_transcript_file_deep(file_path: Path, conn: sqlite3.Connection) -> int:
-    """Deep ingestion of a transcript file with full deduplication."""
+    """Deep ingestion of a transcript file with full deduplication and explicit metadata."""
     if not file_path.exists() or file_path.stat().st_size == 0:
         return 0
 
@@ -104,7 +111,8 @@ def scan_transcript_file_deep(file_path: Path, conn: sqlite3.Connection) -> int:
             for line in f:
                 if line.strip():
                     lines.append(line)
-    except Exception:
+    except Exception as e:
+        log_error("historical", f"Error reading {file_path}", e)
         return 0
 
     if not lines:
@@ -161,21 +169,26 @@ def scan_transcript_file_deep(file_path: Path, conn: sqlite3.Connection) -> int:
                 current_model = "Gemini 3.5 Pro (Medium)"
                 current_thinking_level = parse_thinking_level(content)
 
-            accumulated_context_tokens += estimate_tokens(content)
+            tok_count, _ = estimate_tokens(content)
+            accumulated_context_tokens += tok_count
 
         elif source == "SYSTEM":
-            accumulated_context_tokens += estimate_tokens(content)
+            tok_count, _ = estimate_tokens(content)
+            accumulated_context_tokens += tok_count
 
         elif step_type == "PLANNER_RESPONSE" or source == "MODEL":
-            output_tokens = estimate_tokens(content)
+            output_tokens, _ = estimate_tokens(content)
             for tc in data.get("tool_calls", []):
                 args_str = json.dumps(tc.get("args", {}))
-                output_tokens += estimate_tokens(args_str)
+                tc_tok, _ = estimate_tokens(args_str)
+                output_tokens += tc_tok
 
             reasoning_tokens = 0
+            conf_level = "heuristic_char"
             thought_match = re.search(r'<thought>(.*?)</thought>', content, re.DOTALL)
             if thought_match:
-                reasoning_tokens = estimate_tokens(thought_match.group(1))
+                reasoning_tokens, _ = estimate_tokens(thought_match.group(1))
+                conf_level = "tag_extracted"
             else:
                 base_budget = THINKING_BUDGET_ESTIMATES.get(current_thinking_level, 0)
                 if base_budget > 0:
@@ -212,8 +225,9 @@ def scan_transcript_file_deep(file_path: Path, conn: sqlite3.Connection) -> int:
             INSERT OR IGNORE INTO token_logs (
                 turn_hash, session_id, account_id, timestamp, model_name, thinking_level,
                 prompt_tokens, cached_tokens, reasoning_thinking_tokens, output_tokens,
-                total_tokens, cost_usd, cost_inr, step_index, prompt_preview, metadata_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                total_tokens, cost_usd, cost_inr, step_index, prompt_preview, metadata_json,
+                is_estimated, estimation_confidence, data_source, account_attribution_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 turn_hash,
                 session_id,
@@ -231,6 +245,10 @@ def scan_transcript_file_deep(file_path: Path, conn: sqlite3.Connection) -> int:
                 step_idx,
                 last_user_prompt or "Agent task execution step",
                 json.dumps({"source_file": str(file_path), "workspace": current_workspace}),
+                1,
+                conf_level,
+                "historical_scan",
+                "workspace_bucket",
             ))
 
             if cur.rowcount > 0:
@@ -248,7 +266,8 @@ def scan_transcript_file_deep(file_path: Path, conn: sqlite3.Connection) -> int:
             accumulated_context_tokens += output_tokens
 
         elif step_type in ("VIEW_FILE", "GREP_SEARCH", "RUN_COMMAND", "LIST_DIRECTORY", "CODE_ACTION"):
-            accumulated_context_tokens += estimate_tokens(content)
+            tok_count, _ = estimate_tokens(content)
+            accumulated_context_tokens += tok_count
 
     return turns_ingested
 
@@ -263,8 +282,7 @@ def run_deep_historical_scan(verbose: bool = True) -> Dict[str, Any]:
     discovered_sqlite_dbs: Set[str] = set()
     scanned_roots_count = 0
 
-    if verbose:
-        print("=== STARTING DEEP HISTORICAL TELEMETRY CRAWL ===")
+    logger.info("Starting deep historical telemetry scan...")
 
     for root_dir in HISTORICAL_DISCOVERY_ROOTS:
         if not root_dir.exists():
@@ -291,33 +309,29 @@ def run_deep_historical_scan(verbose: bool = True) -> Dict[str, Any]:
                             discovered_transcripts.add(str(t2))
 
         except Exception as e:
-            if verbose:
-                print(f"Error scanning root {root_dir}: {e}")
+            logger.debug(f"Error scanning root {root_dir}: {e}")
 
     total_recovered_turns = 0
     total_files = len(discovered_transcripts) + len(discovered_sqlite_dbs)
 
     with _lock:
         conn = get_db_connection()
-        # Ingest transcripts
         for t_file in discovered_transcripts:
             try:
                 recovered = scan_transcript_file_deep(Path(t_file), conn)
                 total_recovered_turns += recovered
-            except Exception:
-                pass
+            except Exception as e:
+                log_error("historical", f"Error scanning transcript {t_file}", e)
 
-        # Ingest SQLite state databases
         for db_file in discovered_sqlite_dbs:
             try:
                 recovered = scan_workspace_storage_sqlite(Path(db_file), conn)
                 total_recovered_turns += recovered
-            except Exception:
-                pass
+            except Exception as e:
+                log_error("historical", f"Error scanning sqlite {db_file}", e)
 
         conn.commit()
 
-        # Get total turns in database
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM token_logs")
         total_stored_turns = cur.fetchone()[0]
@@ -336,13 +350,7 @@ def run_deep_historical_scan(verbose: bool = True) -> Dict[str, Any]:
         "timestamp": datetime.utcnow().isoformat() + "Z",
     }
 
-    if verbose:
-        print(f"[+] Deep Historical Crawl Finished in {elapsed}s")
-        print(f"    - Roots Scanned: {scanned_roots_count}")
-        print(f"    - Files Examined: {total_files}")
-        print(f"    - New Turns Recovered: {total_recovered_turns}")
-        print(f"    - Total Lifetime Turns in DB: {total_stored_turns}")
-
+    logger.info(f"Historical crawl completed in {elapsed}s: recovered {total_recovered_turns} turns.")
     return result
 
 

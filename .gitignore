@@ -24,7 +24,6 @@ venv/
 *.log
 *.pid
 scratch/
-test_endpoints.py
 
 # OS / Editor artifacts
 .DS_Store

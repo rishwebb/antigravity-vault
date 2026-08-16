@@ -1,6 +1,6 @@
 """
 Zero-Interruption Background File Watcher Daemon.
-Uses debouncing (500ms) and non-blocking file-lock checks.
+Uses debouncing (500ms), non-blocking file-lock checks, and structured error tracking.
 Consumes < 30MB RAM and < 0.2% CPU at idle.
 """
 
@@ -15,6 +15,9 @@ from typing import Set, Dict, Any
 from config import DISCOVERY_PATHS
 from telemetry_parser import parse_single_transcript, extract_accounts_from_global_storage, hash_to_account_id
 from db import get_db_connection, upsert_account, _lock
+from logger import get_logger, log_error
+
+logger = get_logger("watcher")
 
 # Debounce delay in seconds
 DEBOUNCE_INTERVAL = 0.5
@@ -24,6 +27,20 @@ _stop_event = threading.Event()
 _dirty_files: Set[str] = set()
 _dirty_lock = threading.Lock()
 
+# Watcher metrics
+_WATCHER_METRICS = {
+    "scans_completed": 0,
+    "turns_synced": 0,
+    "files_monitored": 0,
+    "sync_errors": 0,
+    "last_sync_time": None,
+}
+
+
+def get_watcher_metrics() -> Dict[str, Any]:
+    """Retrieve watcher performance and ingestion metrics."""
+    return dict(_WATCHER_METRICS)
+
 
 def mark_file_dirty(file_path: str):
     """Mark a file path as dirty for debounced processing."""
@@ -32,7 +49,7 @@ def mark_file_dirty(file_path: str):
             _dirty_files.add(file_path)
 
 
-def process_dirty_files():
+def process_dirty_files() -> int:
     """Processes accumulated dirty files in a single batch."""
     with _dirty_lock:
         if not _dirty_files:
@@ -50,16 +67,24 @@ def process_dirty_files():
                         email = item["email"]
                         acc_id = hash_to_account_id(email)
                         upsert_account(account_id=acc_id, alias=f"{acc_id.upper()} ({email.split('@')[0]})", email=email)
-                except Exception:
-                    pass
+                except Exception as e:
+                    _WATCHER_METRICS["sync_errors"] += 1
+                    log_error("watcher", f"Error updating accounts from {f_path}", e)
             elif "transcript.jsonl" in f_path:
                 try:
                     t, _, _ = parse_single_transcript(f_path, conn)
                     turns_count += t
-                except Exception:
-                    pass
+                except Exception as e:
+                    _WATCHER_METRICS["sync_errors"] += 1
+                    log_error("watcher", f"Error parsing modified transcript {f_path}", e)
         conn.commit()
         conn.close()
+
+    if turns_count > 0:
+        _WATCHER_METRICS["turns_synced"] += turns_count
+        _WATCHER_METRICS["last_sync_time"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        logger.info(f"Watcher ingested {turns_count} new turns from {len(to_process)} changed files.")
+
     return turns_count
 
 
@@ -73,6 +98,7 @@ class DebouncedPollingWatcher(threading.Thread):
     def run(self):
         while not _stop_event.is_set():
             try:
+                monitored = 0
                 # 1. Discover all transcript files
                 for base_p in DISCOVERY_PATHS:
                     if not base_p.exists():
@@ -83,20 +109,31 @@ class DebouncedPollingWatcher(threading.Thread):
                                 t_log = child / ".system_generated" / "logs" / "transcript.jsonl"
                                 if t_log.exists():
                                     self._check_file(str(t_log))
-                    except Exception:
-                        pass
+                                    monitored += 1
+                                else:
+                                    t_log2 = child / "logs" / "transcript.jsonl"
+                                    if t_log2.exists():
+                                        self._check_file(str(t_log2))
+                                        monitored += 1
+                    except Exception as e:
+                        logger.debug(f"Discovery iteration error in {base_p}: {e}")
 
                 # Check state.vscdb
                 vscdb = Path.home() / "AppData" / "Roaming" / "Antigravity IDE" / "User" / "globalStorage" / "state.vscdb"
                 if vscdb.exists():
                     self._check_file(str(vscdb))
+                    monitored += 1
+
+                _WATCHER_METRICS["files_monitored"] = monitored
+                _WATCHER_METRICS["scans_completed"] += 1
 
                 # 2. Debounce and flush
                 time.sleep(DEBOUNCE_INTERVAL)
                 process_dirty_files()
 
-            except Exception:
-                pass
+            except Exception as e:
+                _WATCHER_METRICS["sync_errors"] += 1
+                log_error("watcher", "Watcher poll loop exception", e)
 
             # Sleep remaining interval in small chunks to allow instant shutdown
             for _ in range(int(self.check_interval * 10)):
@@ -117,9 +154,8 @@ class DebouncedPollingWatcher(threading.Thread):
 
 def start_watcher():
     """Start watcher daemon in background."""
-    print("Starting Antigravity Telemetry Watcher...")
+    logger.info("Starting Antigravity Telemetry Watcher...")
     
-    # Check if watchdog library is available
     use_watchdog = False
     try:
         from watchdog.observers import Observer
@@ -148,15 +184,14 @@ def start_watcher():
         if active_watches > 0:
             observer.start()
             use_watchdog = True
-            print(f"Watchdog active on {active_watches} directories.")
+            logger.info(f"Watchdog active on {active_watches} directories.")
     except ImportError:
         pass
 
-    # Start debounced polling watcher (works seamlessly on all systems)
     polling_watcher = DebouncedPollingWatcher()
     polling_watcher.start()
 
-    print("Background Telemetry Watcher running silently.")
+    logger.info("Background Telemetry Watcher running.")
     return polling_watcher
 
 

@@ -1,7 +1,7 @@
 """
-Config and Dynamic Pricing Engine for Antigravity Multi-Account Token & Cost Analytics Dashboard.
+Config and Dynamic Settings for Antigravity Multi-Account Token & Cost Analytics Dashboard.
 Supports Gemini 3.5 Pro, Gemini 3.6 Flash, Gemini 3.7 Flash with Deep Thinking / Reasoning budgets.
-Includes Remote Cloud Access, Security PIN, Vault Paths, and Historical Scanner Discovery Roots.
+Includes Localhost Hardening, Dynamic PIN Security, Vault Paths, and Historical Scanner Discovery Roots.
 """
 
 import os
@@ -14,7 +14,7 @@ WORKSPACE_DIR = Path(__file__).resolve().parent
 DATABASE_PATH = str(WORKSPACE_DIR / "antigravity_telemetry.db")
 TEMPLATES_DIR = WORKSPACE_DIR / "templates"
 
-# Persistent Immutable Vault Storage (immune to ~/.gemini/ cache wipes)
+# Persistent Vault Storage (immune to ~/.gemini/ cache wipes)
 USER_HOME = Path.home()
 VAULT_DIR = USER_HOME / ".antigravity_analytics_vault"
 BACKUPS_DIR = VAULT_DIR / "backups"
@@ -22,14 +22,18 @@ ARCHIVE_JSON_PATH = VAULT_DIR / "all_time_archive.json"
 VAULT_DIR.mkdir(parents=True, exist_ok=True)
 BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Host & Port configuration
-SERVER_HOST = os.getenv("ANTIGRAVITY_HOST", "0.0.0.0")
+# Host & Port configuration - Default binds to 127.0.0.1 for local security
+SERVER_HOST = os.getenv("ANTIGRAVITY_HOST", "127.0.0.1")
 SERVER_PORT = int(os.getenv("ANTIGRAVITY_PORT", 4848))
 
-# Security PIN for Remote / Mobile Access
-# Localhost bypasses PIN by default; remote/tunnel access requires PIN authentication.
-DEFAULT_ACCESS_PIN = os.getenv("ANTIGRAVITY_PIN", "4848")
-AUTH_SECRET_KEY = os.getenv("ANTIGRAVITY_SECRET", "antigravity_vault_secret_token_key_2026")
+# Opt-in Cloudflare Tunnel (disabled by default for security & privacy)
+ENABLE_TUNNEL = os.getenv("ANTIGRAVITY_ENABLE_TUNNEL", "false").lower() in ("true", "1", "yes")
+
+# Dynamic Authentication & PIN Security
+# Loads or auto-generates high-entropy credentials saved in vault
+from auth import ACTIVE_PIN, AUTH_SECRET_KEY, get_active_pin
+
+DEFAULT_ACCESS_PIN = ACTIVE_PIN
 
 # Dynamic Currency & Forex
 DEFAULT_USD_TO_INR = 87.00
@@ -114,152 +118,25 @@ DEFAULT_ACCOUNTS = [
     },
 ]
 
-# Pricing Engine: Rates per 1,000,000 tokens (1M tokens)
-# Billed rates: Thinking/reasoning tokens are billed as output tokens.
-MODEL_PRICING = {
-    # Gemini 3.7 Flash
-    "gemini-3.7-flash": {
-        "name": "Gemini 3.7 Flash",
-        "family": "flash",
-        "input_per_million": 0.75,
-        "output_per_million": 3.75,
-        "cached_per_million": 0.075,
-    },
-    # Gemini 3.6 Flash (primary workhorse)
-    "gemini-3.6-flash": {
-        "name": "Gemini 3.6 Flash",
-        "family": "flash",
-        "input_per_million": 0.75,
-        "output_per_million": 3.75,
-        "cached_per_million": 0.075,
-    },
-    # Gemini 3.5 Pro (tiered pricing <= 200k vs > 200k)
-    "gemini-3.5-pro": {
-        "name": "Gemini 3.5 Pro",
-        "family": "pro",
-        "input_per_million_standard": 2.00,
-        "input_per_million_large": 4.00,
-        "output_per_million_standard": 12.00,
-        "output_per_million_large": 18.00,
-        "cached_per_million": 0.20,
-    },
-    # Fallback Flash tier
-    "fallback-flash": {
-        "name": "Gemini Flash (Standard)",
-        "family": "flash",
-        "input_per_million": 0.75,
-        "output_per_million": 3.75,
-        "cached_per_million": 0.075,
-    },
-    # Fallback Pro tier
-    "fallback-pro": {
-        "name": "Gemini Pro (Standard)",
-        "family": "pro",
-        "input_per_million_standard": 2.00,
-        "input_per_million_large": 4.00,
-        "output_per_million_standard": 12.00,
-        "output_per_million_large": 18.00,
-        "cached_per_million": 0.20,
-    },
-}
-
-# Thinking Token Budget Heuristics
-THINKING_BUDGET_ESTIMATES = {
-    "None": 0,
-    "Low": 1000,
-    "Medium": 3000,
-    "High": 8000,
-}
+# Re-export Pricing Engine Functions & Constants for seamless compatibility
+from pricing_engine import (
+    MODEL_PRICING,
+    THINKING_BUDGET_ESTIMATES,
+    normalize_model_name,
+    parse_thinking_level,
+    calculate_turn_cost,
+    estimate_tokens,
+)
 
 
 def get_local_lan_ip() -> str:
-    """Detect local Wi-Fi / Ethernet LAN IP for same-network mobile pairing."""
+    """Detect local Wi-Fi / Ethernet LAN IP for same-network pairing."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(0.5)
-        # Connect to public DNS address without sending packet to detect outgoing interface IP
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
         s.close()
         return ip
     except Exception:
         return "127.0.0.1"
-
-
-def normalize_model_name(raw_name: str) -> str:
-    """Normalize raw model string from telemetry to standard identifier."""
-    if not raw_name:
-        return "gemini-3.6-flash"
-    raw_lower = str(raw_name).lower().strip()
-
-    if "3.7" in raw_lower:
-        if "pro" in raw_lower:
-            return "gemini-3.5-pro"
-        return "gemini-3.7-flash"
-    elif "3.6" in raw_lower:
-        if "pro" in raw_lower:
-            return "gemini-3.5-pro"
-        return "gemini-3.6-flash"
-    elif "3.5" in raw_lower:
-        if "flash" in raw_lower:
-            return "gemini-3.6-flash"
-        return "gemini-3.5-pro"
-    elif "pro" in raw_lower:
-        return "gemini-3.5-pro"
-    elif "flash" in raw_lower:
-        return "gemini-3.6-flash"
-    return "gemini-3.6-flash"
-
-
-def parse_thinking_level(raw_string: str) -> str:
-    """Extract Low, Medium, High, or None from settings change or model string."""
-    if not raw_string:
-        return "None"
-    s = str(raw_string).lower()
-    if "(high)" in s or "high" in s:
-        return "High"
-    if "(medium)" in s or "medium" in s or "med" in s:
-        return "Medium"
-    if "(low)" in s or "low" in s:
-        return "Low"
-    return "None"
-
-
-def calculate_turn_cost(
-    model_name: str,
-    prompt_tokens: int,
-    cached_tokens: int,
-    output_tokens: int,
-    reasoning_thinking_tokens: int,
-    usd_to_inr: float = DEFAULT_USD_TO_INR,
-) -> tuple:
-    """
-    Calculates exact turn cost according to official Gemini pricing rules.
-    1. Turn Output Tokens = Standard Output Tokens + Thinking/Reasoning Tokens
-    2. Turn Cost (USD) = (Input * InRate) + (Turn Output * OutRate) + (Cached * CacheRate)
-    3. Turn Cost (INR) = Turn Cost (USD) * usd_to_inr
-    Returns: (total_tokens, total_output_tokens, cost_usd, cost_inr)
-    """
-    model_key = normalize_model_name(model_name)
-    pricing = MODEL_PRICING.get(model_key, MODEL_PRICING["fallback-flash"])
-
-    total_output = output_tokens + reasoning_thinking_tokens
-    total_tokens = prompt_tokens + cached_tokens + total_output
-
-    if pricing["family"] == "pro":
-        if prompt_tokens > 200_000:
-            in_rate = pricing["input_per_million_large"] / 1_000_000.0
-            out_rate = pricing["output_per_million_large"] / 1_000_000.0
-        else:
-            in_rate = pricing["input_per_million_standard"] / 1_000_000.0
-            out_rate = pricing["output_per_million_standard"] / 1_000_000.0
-        cache_rate = pricing["cached_per_million"] / 1_000_000.0
-    else:
-        in_rate = pricing["input_per_million"] / 1_000_000.0
-        out_rate = pricing["output_per_million"] / 1_000_000.0
-        cache_rate = pricing["cached_per_million"] / 1_000_000.0
-
-    cost_usd = (prompt_tokens * in_rate) + (total_output * out_rate) + (cached_tokens * cache_rate)
-    cost_inr = cost_usd * usd_to_inr
-
-    return (total_tokens, total_output, round(cost_usd, 6), round(cost_inr, 4))
