@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="docs/images/Logo_Readme.png" alt="Antigravity Vault" width="650px" />
+<img src="docs/images/Logo_Readme.png" alt="Antigravity Vault" width="600px" style="margin-bottom: 0px;" />
 
-### *The 100% Local, Zero-Cost, Multi-Account Token & Cost Analytics Cloud Hub for Google Antigravity*
+<h3 style="margin-top: 2px; margin-bottom: 14px;"><i>The 100% Local, Zero-Cost, Multi-Account Token & Cost Analytics Cloud Hub for Google Antigravity</i></h3>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-6366f1.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/Python-3.8%2B-10b981.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
