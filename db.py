@@ -1,12 +1,13 @@
 """
 SQLite Database Layer for Antigravity Multi-Account Token & Cost Analytics.
 Thread-safe, WAL-enabled, with SHA256 Turn Deduplication & Explicit Estimation Metadata.
-Includes Security Audit Logs and System Error Observability Tables.
+Includes Persistent Security Rate Limiting, Audit Logs, and System Error Observability Tables.
 """
 
 import sqlite3
 import json
 import os
+import time
 import hashlib
 import threading
 import traceback
@@ -171,12 +172,6 @@ def init_db(db_path: str = DATABASE_PATH):
             created_at TEXT NOT NULL
         );
         """)
-        cursor.execute("PRAGMA table_info(backups);")
-        backup_cols = [col[1] for col in cursor.fetchall()]
-        if "checksum_sha256" not in backup_cols:
-            cursor.execute("ALTER TABLE backups ADD COLUMN checksum_sha256 TEXT;")
-        if "integrity_verified" not in backup_cols:
-            cursor.execute("ALTER TABLE backups ADD COLUMN integrity_verified INTEGER DEFAULT 0;")
 
         # Forex Rates Cache table
         cursor.execute("""
@@ -196,7 +191,7 @@ def init_db(db_path: str = DATABASE_PATH):
         );
         """)
 
-        # Auth Audit Logs Table (Issue 31)
+        # Auth Audit Logs Table
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS auth_audit_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -209,7 +204,17 @@ def init_db(db_path: str = DATABASE_PATH):
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_auth_audit_ts ON auth_audit_logs (timestamp);")
 
-        # System Errors Observability Table (Issue 29)
+        # Persistent Auth Rate Limits Table
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS auth_rate_limits (
+            client_ip TEXT PRIMARY KEY,
+            failed_attempts INTEGER DEFAULT 0,
+            locked_until REAL DEFAULT 0,
+            last_attempt REAL NOT NULL
+        );
+        """)
+
+        # System Errors Observability Table
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS system_errors (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -259,6 +264,112 @@ def verify_db_integrity(db_path: str = DATABASE_PATH) -> bool:
     except Exception as e:
         logger.error(f"DB integrity check failed: {e}")
         return False
+
+
+def record_failed_auth_attempt_db(
+    client_ip: str,
+    max_attempts: int = 5,
+    lockout_seconds: int = 300,
+    db_path: str = DATABASE_PATH,
+) -> Tuple[int, bool, int]:
+    """
+    Persistently records a failed authentication attempt in SQLite.
+    Returns: (failed_attempts_count, is_now_locked, remaining_lockout_seconds)
+    """
+    now = time.time()
+    with _lock:
+        conn = get_db_connection(db_path)
+        cur = conn.cursor()
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS auth_rate_limits (
+            client_ip TEXT PRIMARY KEY,
+            failed_attempts INTEGER DEFAULT 0,
+            locked_until REAL DEFAULT 0,
+            last_attempt REAL NOT NULL
+        );
+        """)
+        cur.execute("SELECT failed_attempts, locked_until, last_attempt FROM auth_rate_limits WHERE client_ip = ?", (client_ip,))
+        row = cur.fetchone()
+
+        if row:
+            prev_attempts, locked_until, last_attempt = row["failed_attempts"], row["locked_until"], row["last_attempt"]
+            # If previous lockout expired, reset attempts
+            if now > locked_until and (now - last_attempt) > lockout_seconds:
+                new_attempts = 1
+                new_locked_until = 0
+            else:
+                new_attempts = prev_attempts + 1
+                new_locked_until = (now + lockout_seconds) if new_attempts >= max_attempts else 0
+
+            cur.execute("""
+            UPDATE auth_rate_limits
+            SET failed_attempts = ?, locked_until = ?, last_attempt = ?
+            WHERE client_ip = ?
+            """, (new_attempts, new_locked_until, now, client_ip))
+        else:
+            new_attempts = 1
+            new_locked_until = (now + lockout_seconds) if new_attempts >= max_attempts else 0
+            cur.execute("""
+            INSERT INTO auth_rate_limits (client_ip, failed_attempts, locked_until, last_attempt)
+            VALUES (?, ?, ?, ?)
+            """, (client_ip, new_attempts, new_locked_until, now))
+
+        conn.commit()
+        conn.close()
+
+        is_locked = new_attempts >= max_attempts or now < new_locked_until
+        remaining = max(0, int(new_locked_until - now)) if is_locked else 0
+        return new_attempts, is_locked, remaining
+
+
+def check_ip_lockout_db(
+    client_ip: str,
+    lockout_seconds: int = 300,
+    db_path: str = DATABASE_PATH,
+) -> Tuple[bool, int]:
+    """
+    Persistently checks if an IP is currently locked out in SQLite.
+    Returns: (is_locked, remaining_seconds)
+    """
+    now = time.time()
+    try:
+        conn = get_db_connection(db_path)
+        cur = conn.cursor()
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS auth_rate_limits (
+            client_ip TEXT PRIMARY KEY,
+            failed_attempts INTEGER DEFAULT 0,
+            locked_until REAL DEFAULT 0,
+            last_attempt REAL NOT NULL
+        );
+        """)
+        cur.execute("SELECT failed_attempts, locked_until FROM auth_rate_limits WHERE client_ip = ?", (client_ip,))
+        row = cur.fetchone()
+        conn.close()
+
+        if not row:
+            return False, 0
+
+        locked_until = row["locked_until"]
+        if locked_until > now:
+            return True, max(1, int(locked_until - now))
+        return False, 0
+    except Exception as e:
+        logger.debug(f"Rate limit check notice: {e}")
+        return False, 0
+
+
+def clear_ip_rate_limit_db(client_ip: str, db_path: str = DATABASE_PATH):
+    """Clears rate limit record upon successful login."""
+    try:
+        with _lock:
+            conn = get_db_connection(db_path)
+            cur = conn.cursor()
+            cur.execute("DELETE FROM auth_rate_limits WHERE client_ip = ?", (client_ip,))
+            conn.commit()
+            conn.close()
+    except Exception as e:
+        logger.debug(f"Rate limit clear notice: {e}")
 
 
 def get_current_forex_rate(db_path: str = DATABASE_PATH) -> float:
@@ -582,9 +693,10 @@ def get_summary_stats(
 
     row["total_savings_usd"] = row["total_cost_usd"]
     row["total_savings_inr"] = row["total_cost_inr"]
-    row["cost_is_estimated"] = True  # Explicit estimation indicator
+    row["cost_is_estimated"] = True
+    row["billing_measured"] = False
+    row["cost_type"] = "estimated_model"
 
-    # Database file size & health
     row["db_size_bytes"] = os.path.getsize(db_path) if os.path.exists(db_path) else 0
 
     conn.close()
@@ -634,6 +746,8 @@ def get_accounts_breakdown(db_path: str = DATABASE_PATH) -> List[Dict[str, Any]]
             r["thinking_pct"] = round((r["thinking_tokens"] / out_and_think) * 100.0, 1)
         else:
             r["thinking_pct"] = 0.0
+
+        r["attribution_type"] = "email_verified" if r.get("email") and "@" in r["email"] and "gemini.local" not in r["email"] else "workspace_bucket"
 
     conn.close()
     return rows
@@ -728,9 +842,10 @@ def get_recent_logs(
     model_filter: Optional[str] = None,
     search: Optional[str] = None,
     sanitize_paths: bool = True,
+    privacy_mode: bool = False,
     db_path: str = DATABASE_PATH,
 ) -> Dict[str, Any]:
-    """Retrieve paginated live log feed with optional path sanitization for privacy."""
+    """Retrieve paginated live log feed with optional path sanitization and privacy mode."""
     where_sql, params = _build_filter_clause(
         account_filter=account_filter,
         model_filter=model_filter,
@@ -762,7 +877,11 @@ def get_recent_logs(
         d = dict(r)
         d["cost_inr"] = round(d["cost_usd"] * usd_to_inr, 4)
 
-        # Sanitize personal directory paths in metadata if requested
+        # Privacy mode: Redact prompt text to abstract action tag
+        if privacy_mode:
+            d["prompt_preview"] = "[Redacted in Privacy Mode]"
+
+        # Sanitize personal directory paths in metadata
         if sanitize_paths and d.get("metadata_json"):
             try:
                 meta = json.loads(d["metadata_json"])

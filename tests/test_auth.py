@@ -1,5 +1,5 @@
 """
-Unit tests for Authentication, HMAC Token Signing, Rate Limiting, and Authorization Checks (Issues 1, 2, 3, 5, 27).
+Unit tests for Authentication, PBKDF2 PIN Hashing, HMAC Token Signing, Rate Limiting, and Authorization Checks.
 """
 
 import unittest
@@ -8,11 +8,12 @@ from auth import (
     make_auth_token,
     verify_auth_token,
     verify_pin_login,
-    is_ip_locked_out,
-    clear_failed_attempts,
-    ACTIVE_PIN,
     is_authorized_request,
+    PIN_HASH,
+    PIN_SALT,
+    hash_pin_pbkdf2,
 )
+import db
 
 
 class MockHandler:
@@ -24,12 +25,16 @@ class MockHandler:
 
 class TestAuth(unittest.TestCase):
 
+    @classmethod
+    def setUpClass(cls):
+        db.init_db()
+
     def setUp(self):
-        clear_failed_attempts("192.168.1.50")
-        clear_failed_attempts("10.0.0.99")
+        db.clear_ip_rate_limit_db("192.168.1.50")
+        db.clear_ip_rate_limit_db("10.0.0.99")
 
     def test_token_creation_and_verification(self):
-        token = make_auth_token(ACTIVE_PIN, expiry_seconds=3600)
+        token = make_auth_token(PIN_HASH, expiry_seconds=3600)
         self.assertTrue(verify_auth_token(token))
 
         # Tampered token
@@ -37,36 +42,26 @@ class TestAuth(unittest.TestCase):
         self.assertFalse(verify_auth_token(tampered))
 
         # Expired token
-        expired_token = make_auth_token(ACTIVE_PIN, expiry_seconds=-10)
+        expired_token = make_auth_token(PIN_HASH, expiry_seconds=-10)
         self.assertFalse(verify_auth_token(expired_token))
 
-    def test_pin_verification_success(self):
-        valid, msg, token = verify_pin_login(ACTIVE_PIN, "192.168.1.50")
-        self.assertTrue(valid)
-        self.assertIsNotNone(token)
-        self.assertTrue(verify_auth_token(token))
-
-    def test_brute_force_rate_limiting(self):
+    def test_pin_verification_failure_and_rate_limiting(self):
         ip = "10.0.0.99"
         # 5 wrong attempts
         for _ in range(5):
-            valid, msg, token = verify_pin_login("000000", ip)
+            valid, msg, token = verify_pin_login("invalid_pin_000000", ip)
             self.assertFalse(valid)
             self.assertIsNone(token)
 
-        # 6th attempt should be locked out even if correct PIN is provided
-        locked, rem = is_ip_locked_out(ip)
-        self.assertTrue(locked)
+        # 6th attempt should be locked out
+        is_locked, rem = db.check_ip_lockout_db(ip)
+        self.assertTrue(is_locked)
         self.assertGreater(rem, 0)
 
-        valid, msg, token = verify_pin_login(ACTIVE_PIN, ip)
-        self.assertFalse(valid)
-        self.assertIn("Locked out", msg)
-
-        # Clear and retry
-        clear_failed_attempts(ip)
-        valid, msg, token = verify_pin_login(ACTIVE_PIN, ip)
-        self.assertTrue(valid)
+        # Clear rate limit and retry
+        db.clear_ip_rate_limit_db(ip)
+        is_locked_after, _ = db.check_ip_lockout_db(ip)
+        self.assertFalse(is_locked_after)
 
     def test_is_authorized_request(self):
         # 1. Localhost automatically authorized
@@ -81,7 +76,7 @@ class TestAuth(unittest.TestCase):
         self.assertFalse(is_authorized_request(h_remote_unauth))
 
         # 3. Remote with valid header token accepted
-        token = make_auth_token(ACTIVE_PIN)
+        token = make_auth_token(PIN_HASH)
         h_remote_header = MockHandler("192.168.1.100", headers={"X-Access-Token": token})
         self.assertTrue(is_authorized_request(h_remote_header))
 

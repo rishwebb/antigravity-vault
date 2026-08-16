@@ -29,12 +29,6 @@ SERVER_PORT = int(os.getenv("ANTIGRAVITY_PORT", 4848))
 # Opt-in Cloudflare Tunnel (disabled by default for security & privacy)
 ENABLE_TUNNEL = os.getenv("ANTIGRAVITY_ENABLE_TUNNEL", "false").lower() in ("true", "1", "yes")
 
-# Dynamic Authentication & PIN Security
-# Loads or auto-generates high-entropy credentials saved in vault
-from auth import ACTIVE_PIN, AUTH_SECRET_KEY, get_active_pin
-
-DEFAULT_ACCESS_PIN = ACTIVE_PIN
-
 # Dynamic Currency & Forex
 DEFAULT_USD_TO_INR = 87.00
 FOREX_API_URLS = [

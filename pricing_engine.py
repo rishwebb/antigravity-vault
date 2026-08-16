@@ -1,10 +1,11 @@
 """
 Pricing and Token Estimation Engine for Antigravity & Gemini 3.x series.
-Provides model rate tiers, character-length heuristic estimators with confidence levels,
+Provides model rate tiers, subword BPE tokenizers with exact confidence level,
 and tiered billing calculations for Flash & Pro models.
 """
 
-from typing import Tuple, Dict, Any
+import re
+from typing import Tuple, Dict, Any, Optional
 
 # Dynamic Currency & Forex default
 DEFAULT_USD_TO_INR = 87.00
@@ -66,15 +67,38 @@ THINKING_BUDGET_ESTIMATES = {
     "High": 8000,
 }
 
+_TIKTOKEN_ENCODER = None
+_TIKTOKEN_INITIALIZED = False
+
+
+def _get_tokenizer():
+    global _TIKTOKEN_ENCODER, _TIKTOKEN_INITIALIZED
+    if not _TIKTOKEN_INITIALIZED:
+        _TIKTOKEN_INITIALIZED = True
+        try:
+            import tiktoken
+            _TIKTOKEN_ENCODER = tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            _TIKTOKEN_ENCODER = None
+    return _TIKTOKEN_ENCODER
+
 
 def estimate_tokens(text: str) -> Tuple[int, str]:
     """
     Token estimator with estimation method indicator.
     Returns: (token_count, estimation_confidence)
-    Estimation confidence: 'exact' (if tokenizer available) or 'heuristic_char' (~3.8 chars/tok).
+    Estimation confidence: 'exact_tokenizer' (if tiktoken is available) or 'heuristic_char' (~3.8 chars/tok).
     """
     if not text:
         return (0, "heuristic_char")
+
+    enc = _get_tokenizer()
+    if enc is not None:
+        try:
+            tokens = len(enc.encode(text))
+            return (max(1, tokens), "exact_tokenizer")
+        except Exception:
+            pass
 
     # Fast character-length heuristic (~3.8 chars per token for code/text)
     tok = max(1, int(len(text) / 3.8))

@@ -1,13 +1,14 @@
 """
 Local & Cloud-Accessible REST API & Web Dashboard Server for Antigravity Multi-Account Analytics.
-Provides Centralized Authorization, Brute-Force Protected PIN Login, Observability Metrics,
-Audit Logging, Dynamic Forex, and Verified Backup Snapshots.
+Provides Strict Authorization, CORS Origin Hardening, Sanitized Error Responses,
+Observability Metrics, and Modular Service Architecture.
 """
 
 import os
 import sys
 import json
 import time
+import secrets
 import threading
 import urllib.parse
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -20,20 +21,11 @@ from config import (
     SERVER_PORT,
     DATABASE_PATH,
     TEMPLATES_DIR,
-    DEFAULT_ACCESS_PIN,
     ENABLE_TUNNEL,
     get_local_lan_ip,
 )
-from auth import (
-    is_authorized_request,
-    verify_pin_login,
-    make_auth_token,
-    get_active_pin,
-    is_ip_locked_out,
-)
+from services import AppContext
 import db
-import telemetry_parser
-import historical_scanner
 import forex
 import backup_engine
 import tunnel
@@ -42,6 +34,8 @@ from logger import get_logger, log_error, get_recent_system_errors
 
 logger = get_logger("server")
 START_TIME = time.time()
+
+PRIVACY_MODE = os.getenv("ANTIGRAVITY_PRIVACY_MODE", "false").lower() in ("true", "1", "yes")
 
 # Ensure UTF-8 stdout for Windows consoles
 if sys.platform == "win32":
@@ -61,20 +55,36 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 class AnalyticsAPIHandler(SimpleHTTPRequestHandler):
     """Handles REST API routes, PIN authorization, system metrics, and serves dashboard assets."""
 
+    def _get_allowed_origin(self) -> Optional[str]:
+        """Validates and returns allowed CORS origin if matching localhost or local LAN."""
+        origin = self.headers.get("Origin")
+        host = self.headers.get("Host")
+        if origin and AppContext.auth.validate_origin(origin, host):
+            return origin
+        return None
+
     def do_OPTIONS(self):
-        """Enable CORS pre-flight."""
+        """Enable CORS pre-flight with strict origin validation."""
         self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self._get_allowed_origin()
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Credentials", "true")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Access-Token, Authorization")
         self.end_headers()
 
     def _send_json(self, data: Any, status: int = 200, extra_headers: list = None):
-        """Helper to send formatted JSON responses."""
+        """Helper to send formatted JSON responses with strict origin headers."""
         payload = json.dumps(data, default=str).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        
+        origin = self._get_allowed_origin()
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Credentials", "true")
+            
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         if extra_headers:
@@ -82,6 +92,13 @@ class AnalyticsAPIHandler(SimpleHTTPRequestHandler):
                 self.send_header(k, v)
         self.end_headers()
         self.wfile.write(payload)
+
+    def _send_sanitized_500(self, endpoint: str, exc: Exception):
+        """Logs internal error and sends opaque sanitized 500 response without leaking internals."""
+        err_id = secrets.token_hex(6)
+        log_error("server", f"Internal error [{err_id}] on {endpoint}", exc)
+        db.record_system_error_to_db("server", f"[{err_id}] {str(exc)}", type(exc).__name__)
+        self._send_json({"error": "Internal Server Error", "error_id": err_id}, status=500)
 
     def _read_json_body(self) -> Dict[str, Any]:
         """Reads and parses JSON POST request body."""
@@ -96,7 +113,7 @@ class AnalyticsAPIHandler(SimpleHTTPRequestHandler):
 
     def _require_auth(self, path: str) -> bool:
         """Enforces authentication check. Returns True if authorized, False if rejected."""
-        if is_authorized_request(self):
+        if AppContext.auth.is_request_authorized(self):
             return True
 
         client_ip = self.client_address[0]
@@ -136,9 +153,9 @@ class AnalyticsAPIHandler(SimpleHTTPRequestHandler):
 
             # 2. Auth Status Check (Public)
             elif path == "/api/auth/status":
-                authed = is_authorized_request(self)
+                authed = AppContext.auth.is_request_authorized(self)
                 is_local = self.client_address[0] in ("127.0.0.1", "::1", "localhost")
-                locked, remaining = is_ip_locked_out(self.client_address[0])
+                locked, remaining = db.check_ip_lockout_db(self.client_address[0])
                 self._send_json({
                     "authenticated": authed,
                     "is_localhost": is_local,
@@ -154,7 +171,7 @@ class AnalyticsAPIHandler(SimpleHTTPRequestHandler):
             elif path == "/api/tunnel":
                 if not self._require_auth(path):
                     return
-                tunnel_info = tunnel.get_tunnel_status()
+                tunnel_info = AppContext.tunnel.get_status()
                 self._send_json(tunnel_info)
                 return
 
@@ -170,7 +187,7 @@ class AnalyticsAPIHandler(SimpleHTTPRequestHandler):
             elif path == "/api/backup":
                 if not self._require_auth(path):
                     return
-                b_status = backup_engine.get_backup_vault_status()
+                b_status = AppContext.backup.get_vault_status()
                 self._send_json(b_status)
                 return
 
@@ -178,7 +195,7 @@ class AnalyticsAPIHandler(SimpleHTTPRequestHandler):
             elif path == "/api/summary":
                 if not self._require_auth(path):
                     return
-                stats = db.get_summary_stats(account_filter=account_id, date_range=date_range)
+                stats = AppContext.analytics.get_summary(account_filter=account_id, date_range=date_range)
                 self._send_json(stats)
                 return
 
@@ -186,7 +203,7 @@ class AnalyticsAPIHandler(SimpleHTTPRequestHandler):
             elif path == "/api/accounts":
                 if not self._require_auth(path):
                     return
-                accounts = db.get_accounts_breakdown()
+                accounts = AppContext.analytics.get_accounts()
                 self._send_json({"accounts": accounts})
                 return
 
@@ -194,7 +211,7 @@ class AnalyticsAPIHandler(SimpleHTTPRequestHandler):
             elif path == "/api/models":
                 if not self._require_auth(path):
                     return
-                breakdown = db.get_models_breakdown(account_filter=account_id, date_range=date_range)
+                breakdown = AppContext.analytics.get_models(account_filter=account_id, date_range=date_range)
                 self._send_json(breakdown)
                 return
 
@@ -202,23 +219,23 @@ class AnalyticsAPIHandler(SimpleHTTPRequestHandler):
             elif path == "/api/timeline":
                 if not self._require_auth(path):
                     return
-                timeline = db.get_timeline_stats(range_type=date_range, account_filter=account_id)
+                timeline = AppContext.analytics.get_timeline(range_type=date_range, account_filter=account_id)
                 self._send_json({"timeline": timeline})
                 return
 
-            # 10. Recent Logs Activity Feed with Privacy Sanitization (Protected)
+            # 10. Recent Logs Activity Feed (Protected)
             elif path == "/api/recent-logs":
                 if not self._require_auth(path):
                     return
                 limit = int(query.get("limit", [50])[0])
                 offset = int(query.get("offset", [0])[0])
-                logs_data = db.get_recent_logs(
+                logs_data = AppContext.analytics.get_recent_logs(
                     limit=limit,
                     offset=offset,
                     account_filter=account_id,
                     model_filter=model_filter,
                     search=search_query,
-                    sanitize_paths=True,
+                    privacy_mode=PRIVACY_MODE,
                 )
                 self._send_json(logs_data)
                 return
@@ -238,7 +255,8 @@ class AnalyticsAPIHandler(SimpleHTTPRequestHandler):
                     "lan_ip": get_local_lan_ip(),
                     "db_integrity": db.verify_db_integrity(),
                     "tunnel_enabled": ENABLE_TUNNEL,
-                    "watcher_metrics": watcher.get_watcher_metrics(),
+                    "privacy_mode": PRIVACY_MODE,
+                    "watcher_metrics": AppContext.ingestion.get_watcher_metrics(),
                 }
                 self._send_json(status_info)
                 return
@@ -264,9 +282,7 @@ class AnalyticsAPIHandler(SimpleHTTPRequestHandler):
                 self.send_error(404, f"Path {path} not found")
 
         except Exception as e:
-            log_error("server", f"GET Exception on {path}", e)
-            db.record_system_error_to_db("server", f"GET error on {path}: {str(e)}", type(e).__name__)
-            self._send_json({"error": "Internal Server Error", "details": str(e)}, status=500)
+            self._send_sanitized_500(path, e)
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -275,16 +291,17 @@ class AnalyticsAPIHandler(SimpleHTTPRequestHandler):
         client_ip = self.client_address[0]
 
         try:
-            # 1. PIN Verification & Login (Public Endpoint with Rate Limiting)
+            # 1. PIN Verification & Login (Public Endpoint with Persistent Rate Limiting)
             if path == "/api/auth/verify":
                 input_pin = str(body.get("pin", "")).strip()
-                is_valid, msg, token = verify_pin_login(input_pin, client_ip)
+                is_valid, msg, token = AppContext.auth.verify_login(input_pin, client_ip)
 
                 if is_valid and token:
                     db.record_auth_audit_event(client_ip, path, "login_success")
                     cookie_val = f"antigravity_token={token}; Path=/; SameSite=Lax; HttpOnly; Max-Age=2592000"
+                    # Zero-token leakage in JSON response: token is delivered strictly via HttpOnly cookie
                     self._send_json(
-                        {"status": "success", "authenticated": True, "token": token, "message": msg},
+                        {"status": "success", "authenticated": True, "message": msg},
                         extra_headers=[("Set-Cookie", cookie_val)]
                     )
                 else:
@@ -298,7 +315,7 @@ class AnalyticsAPIHandler(SimpleHTTPRequestHandler):
             elif path == "/api/historical-scan":
                 if not self._require_auth(path):
                     return
-                scan_res = historical_scanner.run_deep_historical_scan(verbose=False)
+                scan_res = AppContext.ingestion.run_historical_scan(verbose=False)
                 self._send_json(scan_res)
                 return
 
@@ -306,7 +323,7 @@ class AnalyticsAPIHandler(SimpleHTTPRequestHandler):
             elif path == "/api/sync":
                 if not self._require_auth(path):
                     return
-                res = telemetry_parser.discover_and_sync_all()
+                res = AppContext.ingestion.sync_active_transcripts()
                 self._send_json({"status": "success", "sync_result": res})
                 return
 
@@ -322,7 +339,7 @@ class AnalyticsAPIHandler(SimpleHTTPRequestHandler):
             elif path == "/api/backup/create":
                 if not self._require_auth(path):
                     return
-                b_res = backup_engine.run_full_vault_backup()
+                b_res = AppContext.backup.create_backup()
                 self._send_json(b_res)
                 return
 
@@ -330,13 +347,8 @@ class AnalyticsAPIHandler(SimpleHTTPRequestHandler):
             elif path == "/api/backup/verify":
                 if not self._require_auth(path):
                     return
-                snapshots = sorted(backup_engine.BACKUPS_DIR.glob("antigravity_backup_*.sqlite"), key=os.path.getmtime, reverse=True)
-                if not snapshots:
-                    self._send_json({"status": "error", "message": "No backup snapshots available to verify."}, status=404)
-                    return
-                latest_backup = snapshots[0]
-                restorable_res = backup_engine.test_restore_dry_run(latest_backup)
-                self._send_json({"backup": latest_backup.name, "restore_validation": restorable_res})
+                verify_res = AppContext.backup.verify_latest_backup()
+                self._send_json(verify_res)
                 return
 
             # 7. Seed Synthetic Demo Data (Protected)
@@ -357,7 +369,7 @@ class AnalyticsAPIHandler(SimpleHTTPRequestHandler):
                 if not acc_id or not alias:
                     self._send_json({"error": "account_id and alias are required"}, status=400)
                     return
-                db.update_account_alias(acc_id, alias, color)
+                AppContext.analytics.update_account(acc_id, alias, color)
                 self._send_json({"status": "success", "account_id": acc_id})
                 return
 
@@ -367,12 +379,7 @@ class AnalyticsAPIHandler(SimpleHTTPRequestHandler):
                     return
                 rate = body.get("usd_to_inr")
                 if rate:
-                    with db._lock:
-                        conn = db.get_db_connection()
-                        cur = conn.cursor()
-                        cur.execute("INSERT INTO settings (key, value) VALUES ('usd_to_inr', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", (str(rate),))
-                        conn.commit()
-                        conn.close()
+                    AppContext.analytics.set_custom_setting("usd_to_inr", str(rate))
                 self._send_json({"status": "success"})
                 return
 
@@ -380,9 +387,7 @@ class AnalyticsAPIHandler(SimpleHTTPRequestHandler):
                 self.send_error(404, f"Path {path} not found")
 
         except Exception as e:
-            log_error("server", f"POST Exception on {path}", e)
-            db.record_system_error_to_db("server", f"POST error on {path}: {str(e)}", type(e).__name__)
-            self._send_json({"error": "Internal Server Error", "details": str(e)}, status=500)
+            self._send_sanitized_500(path, e)
 
     def log_message(self, format, *args):
         """Silently suppress default console access logs to prevent noise."""
@@ -423,11 +428,9 @@ def run_server(host: str = SERVER_HOST, port: int = SERVER_PORT):
     server_address = (host, port)
     httpd = ThreadedHTTPServer(server_address, AnalyticsAPIHandler)
     
-    active_pin = get_active_pin()
     print("\n" + "=" * 70)
     print(f"  [+] Local Dashboard:   http://localhost:{port}")
     print(f"  [+] Local Wi-Fi / LAN:  http://{lan_ip}:{port}")
-    print(f"  [+] Security PIN Code: {active_pin}")
     print(f"  [+] Server Bind Host:  {host}")
     print(f"  [+] Cloudflare Tunnel: {'Enabled (Opt-in)' if ENABLE_TUNNEL else 'Disabled (Default Local)'}")
     print("=" * 70 + "\n")
