@@ -1,6 +1,7 @@
 <div align="center">
 
-# ⚡ ANTIGRAVITY VAULT ⚡
+<img src="docs/images/Logo_Readme.png" alt="Antigravity Vault" width="650px" />
+
 ### *The 100% Local, Zero-Cost, Multi-Account Token & Cost Analytics Cloud Hub for Google Antigravity*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-6366f1.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
