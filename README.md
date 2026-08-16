@@ -1,14 +1,15 @@
-<div align="center">
+<p align="center">
+  <img src="docs/images/Logo_Readme.png" alt="Antigravity Vault" width="600" /><br>
+  <em><b>The 100% Local, Zero-Cost, Multi-Account Token & Cost Analytics Cloud Hub for Google Antigravity</b></em>
+</p>
 
-<img src="docs/images/Logo_Readme.png" alt="Antigravity Vault" width="600px" style="margin-bottom: 0px;" />
-
-<h3 style="margin-top: 2px; margin-bottom: 14px;"><i>The 100% Local, Zero-Cost, Multi-Account Token & Cost Analytics Cloud Hub for Google Antigravity</i></h3>
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-6366f1.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
-[![Python 3.8+](https://img.shields.io/badge/Python-3.8%2B-10b981.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
-[![Gemini 3.x Supported](https://img.shields.io/badge/Gemini_3.x-3.5_Pro_%7C_3.6_Flash_%7C_3.7_Flash-f59e0b.svg?style=for-the-badge&logo=google&logoColor=white)](https://deepmind.google/technologies/gemini/)
-[![Remote Access](https://img.shields.io/badge/Cloudflare-HTTPS_Tunnel_%2B_QR-ec4899.svg?style=for-the-badge&logo=cloudflare&logoColor=white)](https://cloudflare.com)
-[![Zero External Paid Dependencies](https://img.shields.io/badge/Cost-100%25_Free_%26_Open_Source-06b6d4.svg?style=for-the-badge)](#)
+<p align="center">
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-6366f1.svg?style=for-the-badge" alt="License: MIT" /></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.8%2B-10b981.svg?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.8+" /></a>
+  <a href="https://deepmind.google/technologies/gemini/"><img src="https://img.shields.io/badge/Gemini_3.x-3.5_Pro_%7C_3.6_Flash_%7C_3.7_Flash-f59e0b.svg?style=for-the-badge&logo=google&logoColor=white" alt="Gemini 3.x" /></a>
+  <a href="https://cloudflare.com"><img src="https://img.shields.io/badge/Cloudflare-HTTPS_Tunnel_%2B_QR-ec4899.svg?style=for-the-badge&logo=cloudflare&logoColor=white" alt="Cloudflare Tunnel" /></a>
+  <img src="https://img.shields.io/badge/Cost-100%25_Free_%26_Open_Source-06b6d4.svg?style=for-the-badge" alt="100% Free" />
+</p>
 
 <p align="center">
   <b>Real-Time Telemetry Watcher</b> • <b>Deep Reasoning / Thinking Token Tracker</b> • <b>5-Account Fleet Load Balancer</b> • <b>Permanent Immutability Vault</b> • <b>Live Dynamic Forex</b> • <b>Free Mobile HTTPS Access</b>
@@ -16,9 +17,9 @@
 
 ---
 
-<img src="docs/images/dashboard_hero.png" alt="Antigravity Vault Dashboard" width="100%" style="border-radius: 12px; box-shadow: 0 20px 50px rgba(0,0,0,0.6);" />
-
-</div>
+<p align="center">
+  <img src="docs/images/dashboard_hero.png" alt="Antigravity Vault Dashboard" width="100%" style="border-radius: 12px; box-shadow: 0 20px 50px rgba(0,0,0,0.6);" />
+</p>
 
 ---
 
